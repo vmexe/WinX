@@ -11,7 +11,7 @@ from typing import Callable, Iterable
 
 from ..core import platform as pf
 from ..core.format import human_size
-from ..core.winquery import as_list, ps_json
+from ..core.winquery import as_list, ps_json, text
 
 try:
     import psutil  # type: ignore
@@ -102,10 +102,10 @@ def volumes() -> list[Volume]:
             timeout=240,
         )
     ):
-        drive = str(row.get("Drive", "")).strip()
+        drive = text(row.get("Drive")).strip()
         if drive:
-            media_by_drive[drive] = str(row.get("Media", "") or "")
-            smart_by_drive[drive] = (str(row.get("Health", "") or ""), None)
+            media_by_drive[drive] = text(row.get("Media"))
+            smart_by_drive[drive] = (text(row.get("Health")), None)
 
     if psutil is not None:
         for part in psutil.disk_partitions(all=False):
@@ -159,9 +159,9 @@ def smart_report() -> list[dict]:
     for row in rows:
         out.append(
             {
-                "disk": str(row.get("Disk", "")),
-                "model": str(row.get("Media", "")),
-                "health": str(row.get("Health", "")),
+                "disk": text(row.get("Disk")),
+                "model": text(row.get("Media")),
+                "health": text(row.get("Health")),
                 "power_hours": row.get("Hours"),
                 "read_errors": row.get("Read"),
                 "write_errors": row.get("Write"),

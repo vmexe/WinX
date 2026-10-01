@@ -8,7 +8,7 @@ from typing import Callable
 
 from ..core import platform as pf
 from ..core.runner import run_script
-from ..core.winquery import as_list, ps_json
+from ..core.winquery import as_list, ps_json, text
 
 DRIVERS_SCRIPT = (
     "Get-CimInstance Win32_PnPSignedDriver -ErrorAction SilentlyContinue | "
@@ -68,12 +68,12 @@ def list_drivers(progress: Callable[[int, int, str], None] | None = None) -> lis
     for row in as_list(ps_json(DRIVERS_SCRIPT, timeout=420)):
         out.append(
             Driver(
-                name=str(row.get("DeviceName", "") or ""),
-                version=str(row.get("DriverVersion", "") or ""),
+                name=text(row.get("DeviceName")),
+                version=text(row.get("DriverVersion")),
                 date=_parse_driver_date(row.get("DriverDate")),
-                provider=str(row.get("Manufacturer", "") or ""),
-                inf=str(row.get("InfName", "") or ""),
-                device_class=str(row.get("DeviceClass", "") or ""),
+                provider=text(row.get("Manufacturer")),
+                inf=text(row.get("InfName")),
+                device_class=text(row.get("DeviceClass")),
                 signed=bool(row.get("IsSigned", True)),
             )
         )
@@ -100,11 +100,11 @@ def problem_devices() -> list[dict]:
     for row in as_list(ps_json(PROBLEM_SCRIPT, timeout=240)):
         rows.append(
             {
-                "name": str(row.get("FriendlyName", "") or ""),
-                "status": str(row.get("Status", "") or ""),
-                "class": str(row.get("Class", "") or ""),
-                "instance": str(row.get("InstanceId", "") or ""),
-                "problem": str(row.get("Problem", "") or ""),
+                "name": text(row.get("FriendlyName")),
+                "status": text(row.get("Status")),
+                "class": text(row.get("Class")),
+                "instance": text(row.get("InstanceId")),
+                "problem": text(row.get("Problem")),
             }
         )
     return rows

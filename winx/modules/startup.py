@@ -15,7 +15,7 @@ from ..core import platform as pf
 from ..core import registry, services
 from ..core.model import MODERATE, SAFE
 from ..core.runner import run_script
-from ..core.winquery import as_list, ps_json
+from ..core.winquery import as_list, ps_json, text
 
 RUN_KEYS = [
     ("HKCU", r"Software\Microsoft\Windows\CurrentVersion\Run"),
@@ -172,19 +172,19 @@ def _from_tasks() -> list[StartupItem]:
     data = ps_json(_TASKS_SCRIPT + "| Select-Object -First 200", timeout=240)
     items: list[StartupItem] = []
     for row in as_list(data):
-        name = str(row.get("Name", "")).strip()
+        name = text(row.get("Name")).strip()
         if not name:
             continue
         items.append(
             StartupItem(
                 name=name,
-                command=str(row.get("Command", "")),
+                command=text(row.get("Command")),
                 location="Task Scheduler",
                 type="Task",
                 enabled=True,
-                impact=_impact_for(name, str(row.get("Command", ""))),
-                publisher=str(row.get("Publisher", "") or ""),
-                task_path=str(row.get("Path", "\\") or "\\"),
+                impact=_impact_for(name, text(row.get("Command"))),
+                publisher=text(row.get("Publisher")),
+                task_path=text(row.get("Path")) or "\\",
             )
         )
     return items

@@ -9,7 +9,7 @@ from typing import Callable
 from ..core import platform as pf
 from ..core.format import human_size
 from ..core.runner import run_script
-from ..core.winquery import as_list, ps_json
+from ..core.winquery import as_list, ps_json, text
 
 UNINSTALL_SCRIPT = (
     "$paths = @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',"
@@ -147,7 +147,7 @@ def installed_apps(progress: Callable[[int, int, str], None] | None = None) -> l
     if progress:
         progress(1, 2, "reading uninstall registry keys")
     for row in as_list(ps_json(UNINSTALL_SCRIPT, timeout=300)):
-        name = str(row.get("DisplayName", "")).strip()
+        name = text(row.get("DisplayName")).strip()
         if not name:
             continue
         size = row.get("EstimatedSize")
@@ -155,37 +155,37 @@ def installed_apps(progress: Callable[[int, int, str], None] | None = None) -> l
             size_mb = int(size) // 1024 if size else 0
         except (TypeError, ValueError):
             size_mb = 0
-        ps_path = str(row.get("PSPath", "") or "")
+        ps_path = text(row.get("PSPath"))
         key_id = ps_path.split("Uninstall\\")[-1] if "Uninstall\\" in ps_path else name
         apps.append(
             App(
                 name=name,
-                version=str(row.get("DisplayVersion", "") or ""),
-                publisher=str(row.get("Publisher", "") or ""),
+                version=text(row.get("DisplayVersion")),
+                publisher=text(row.get("Publisher")),
                 installed=_fmt_date(row.get("InstallDate")),
                 size_mb=size_mb,
-                source="MSI" if "MsiExec" in str(row.get("UninstallString", "")) else "Win32",
+                source="MSI" if "MsiExec" in text(row.get("UninstallString")) else "Win32",
                 uninstall_id=key_id,
-                uninstall_string=str(row.get("UninstallString", "") or ""),
-                quiet_string=str(row.get("QuietUninstallString", "") or ""),
+                uninstall_string=text(row.get("UninstallString")),
+                quiet_string=text(row.get("QuietUninstallString")),
             )
         )
 
     if progress:
         progress(2, 2, "enumerating Store apps")
     for row in as_list(ps_json(APPX_SCRIPT, timeout=300)):
-        name = str(row.get("Name", "")).strip()
+        name = text(row.get("Name")).strip()
         if not name:
             continue
         apps.append(
             App(
                 name=name,
-                version=str(row.get("Version", "") or ""),
-                publisher=str(row.get("Publisher", "") or ""),
+                version=text(row.get("Version")),
+                publisher=text(row.get("Publisher")),
                 size_mb=0,
                 source="AppX",
-                uninstall_id=str(row.get("PackageFullName", "") or ""),
-                uninstall_string=f"Remove-AppxPackage '{row.get('PackageFullName','')}'",
+                uninstall_id=text(row.get("PackageFullName")),
+                uninstall_string=f"Remove-AppxPackage '{text(row.get('PackageFullName'))}'",
                 removable=not bool(row.get("NonRemovable")),
             )
         )

@@ -11,7 +11,7 @@ from typing import Callable
 from ..core import platform as pf
 from ..core import registry
 from ..core.format import human_duration, human_size
-from ..core.winquery import as_list, ps_json
+from ..core.winquery import as_list, ps_json, text
 
 try:
     import psutil  # type: ignore
@@ -94,7 +94,7 @@ def snapshot(progress: Callable[[int, int, str], None] | None = None) -> dict:
         progress(1, 5, "processor")
     for row in as_list(ps_json("Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed", timeout=180)):
         info["cpu"] = {
-            "name": str(row.get("Name", "")).strip(),
+            "name": text(row.get("Name")).strip(),
             "cores": row.get("NumberOfCores") or 0,
             "threads": row.get("NumberOfLogicalProcessors") or 0,
             "freq_max": round((row.get("MaxClockSpeed") or 0) / 1000, 2),
@@ -106,13 +106,13 @@ def snapshot(progress: Callable[[int, int, str], None] | None = None) -> dict:
         progress(2, 5, "graphics")
     info["gpu"] = [
         {
-            "name": str(r.get("Name", "")).strip(),
-            "driver": str(r.get("DriverVersion", "") or ""),
+            "name": text(r.get("Name")).strip(),
+            "driver": text(r.get("DriverVersion")),
             "memory": _gpu_memory(r.get("AdapterRAM")),
-            "resolution": f"{r.get('CurrentHorizontalResolution','')}x{r.get('CurrentVerticalResolution','')}"
+            "resolution": f"{text(r.get('CurrentHorizontalResolution'))}x{text(r.get('CurrentVerticalResolution'))}"
             if r.get("CurrentHorizontalResolution")
             else "",
-            "refresh": f"{r.get('CurrentRefreshRate','')} Hz" if r.get("CurrentRefreshRate") else "",
+            "refresh": f"{text(r.get('CurrentRefreshRate'))} Hz" if r.get("CurrentRefreshRate") else "",
         }
         for r in as_list(
             ps_json(
@@ -127,24 +127,28 @@ def snapshot(progress: Callable[[int, int, str], None] | None = None) -> dict:
         progress(3, 5, "motherboard & bios")
     for row in as_list(ps_json("Get-CimInstance Win32_BaseBoard | Select-Object Manufacturer, Product, SerialNumber", timeout=180)):
         info["motherboard"] = {
-            "manufacturer": str(row.get("Manufacturer", "") or "").strip(),
-            "product": str(row.get("Product", "") or "").strip(),
-            "serial": str(row.get("SerialNumber", "") or "").strip(),
+            "manufacturer": text(row.get("Manufacturer")).strip(),
+            "product": text(row.get("Product")).strip(),
+            "serial": text(row.get("SerialNumber")).strip(),
         }
         break
     for row in as_list(ps_json("Get-CimInstance Win32_BIOS | Select-Object SMBIOSBIOSVersion, ReleaseDate", timeout=180)):
-        info["motherboard"]["bios"] = f"{row.get('SMBIOSBIOSVersion','')} ({_parse_cim_date(row.get('ReleaseDate'))})".strip()
+        info["motherboard"]["bios"] = (
+            f"{text(row.get('SMBIOSBIOSVersion'))} ({_parse_cim_date(row.get('ReleaseDate'))})".strip()
+        )
         break
 
     if progress:
         progress(4, 5, "network adapters")
     info["network"] = [
         {
-            "name": str(r.get("name", "")),
-            "type": "Wireless" if "wi-fi" in str(r.get("name", "")).lower() or "wireless" in str(r.get("name", "")).lower() else "Ethernet",
-            "ip": ", ".join(r.get("ip") or []) if isinstance(r.get("ip"), list) else str(r.get("ip") or ""),
-            "mac": str(r.get("mac") or ""),
-            "speed": str(r.get("speed") or ""),
+            "name": text(r.get("name")),
+            "type": "Wireless"
+            if "wi-fi" in text(r.get("name")).lower() or "wireless" in text(r.get("name")).lower()
+            else "Ethernet",
+            "ip": text(r.get("ip")),
+            "mac": text(r.get("mac")),
+            "speed": text(r.get("speed")),
         }
         for r in as_list(
             ps_json(
@@ -276,7 +280,7 @@ def health_checks(
         from . import disks as disks_mod
 
         for row in disks_mod.smart_report():
-            health = str(row.get("health", "")).lower()
+            health = str(row.get("health") or "").lower()
             if health and health not in ("healthy", "ok"):
                 checks.append({"name": f"Disk health ({row.get('disk','')})", "status": "fail",
                                "detail": f"{health.title()} — back up your data now", "fix": ("Check disks", "disks")})

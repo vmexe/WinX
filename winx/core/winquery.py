@@ -47,6 +47,23 @@ def ps_csv(script: str, timeout: int = 180) -> list[dict]:
         return []
 
 
+def text(value: Any, default: str = "") -> str:
+    """None-safe string conversion for CIM/PowerShell values.
+
+    A missing property arrives as ``None`` (and an empty collection can arrive
+    as ``[None]``), so ``str(value)`` would leak the literal "None" into the
+    UI or explode inside a join().
+    """
+    if value is None:
+        return default
+    if isinstance(value, (list, tuple)):
+        parts = [text(v) for v in value]
+        return ", ".join(p for p in parts if p)
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return str(value)
+
+
 def as_list(data: Any) -> list[dict]:
     if data is None:
         return []
