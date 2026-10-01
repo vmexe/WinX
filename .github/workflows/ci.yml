@@ -48,9 +48,8 @@ jobs:
         if: always() && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          { echo '### Self-test output ('"${{ matrix.os }}"')'; echo '```'; cat selftest.txt; echo '```'; } > body.md
-          gh pr comment "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --body-file body.md
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python tools/post_ci_output.py selftest.txt "${{ matrix.os }}"
 
       - name: Fail the job if the self-test failed
         if: steps.selftest.outcome == 'failure'
