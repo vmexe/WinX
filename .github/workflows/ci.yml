@@ -39,7 +39,6 @@ jobs:
 
       - name: Run the self-test
         id: selftest
-        continue-on-error: true
         shell: bash
         run: |
           set +e
@@ -48,17 +47,15 @@ jobs:
           cat selftest.txt
           exit $code
 
+      # Posted on failure so a broken matrix job can be diagnosed from the
+      # conversation even when the job log cannot be downloaded.
       - name: Post self-test output to the PR
-        if: failure() && github.event_name == 'pull_request'
+        if: always() && steps.selftest.outcome == 'failure' && github.event_name == 'pull_request'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: python tools/post_ci_output.py selftest.txt "${{ matrix.os }}"
-
-      - name: Fail the job if the self-test failed
-        if: steps.selftest.outcome == 'failure'
-        run: exit 1
 
   # ---------------------------------------------------------------------
   # Builds the single-file GUI executable.
