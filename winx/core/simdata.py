@@ -217,6 +217,39 @@ def simulated_installed_apps() -> list[dict]:
     ]
 
 
+def simulated_updates() -> list[dict]:
+    """Rows the Updater page shows in simulation mode."""
+    return [
+        {"name": "Windows 11 cumulative update", "available": "KB5041585", "source": "windows",
+         "identifier": "5041585", "size": 812_000_000, "note": "Important",
+         "needs_reboot": True, "needs_admin": True},
+        {"name": "Security intelligence update for Defender", "available": "KB2267602",
+         "source": "windows", "identifier": "2267602", "size": 92_000_000, "note": "Critical",
+         "needs_admin": True},
+        {"name": ".NET 8 runtime update", "available": "KB5039895", "source": "windows",
+         "identifier": "5039895", "size": 64_000_000, "note": "Recommended", "needs_admin": True},
+        {"name": "Mozilla Firefox", "current": "129.0", "available": "130.0.1",
+         "source": "winget", "identifier": "Mozilla.Firefox", "note": "winget"},
+        {"name": "7-Zip", "current": "24.08", "available": "24.09", "source": "winget",
+         "identifier": "7zip.7zip", "note": "winget"},
+        {"name": "Visual Studio Code", "current": "1.92.2", "available": "1.93.1",
+         "source": "winget", "identifier": "Microsoft.VisualStudioCode", "note": "winget"},
+        {"name": "Notepad++", "current": "8.6.9", "available": "8.7", "source": "winget",
+         "identifier": "Notepad++.Notepad++", "note": "winget"},
+    ]
+
+
+def simulated_update_history() -> list[dict]:
+    return [
+        {"title": "2024-08 Cumulative Update for Windows 11 (KB5041585)",
+         "date": "2024-08-14 03:12:44", "result": "succeeded"},
+        {"title": "Security Intelligence Update for Microsoft Defender (KB2267602)",
+         "date": "2024-08-13 09:01:10", "result": "succeeded"},
+        {"title": "2024-07 .NET Framework update (KB5039895)",
+         "date": "2024-07-10 22:40:05", "result": "succeeded with errors"},
+    ]
+
+
 def simulated_startup_items() -> list[dict]:
     return [
         {"name": "OneDrive", "command": r"C:\Users\demo\AppData\Local\Microsoft\OneDrive\OneDrive.exe /background", "location": r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "type": "Registry", "enabled": True, "impact": "Low", "publisher": "Microsoft"},

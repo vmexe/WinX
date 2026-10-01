@@ -52,6 +52,7 @@ class AppsPage(Page):
     def __init__(self, ctx: AppContext):
         super().__init__(ctx)
         self.entries: list[apps.App] = []
+        self.icons = sysicons.IconLoader(self, size=32)
 
         self.layout_.addLayout(self.cache_row())
 
@@ -161,6 +162,7 @@ class AppsPage(Page):
         self.tree.setSortingEnabled(False)
         self.tree.blockSignals(True)
         self.tree.clear()
+        pending: list[QTreeWidgetItem] = []
         for app in entries:
             is_bloat, reason = apps.is_bloat_app(app)
             item = AppRow(
@@ -172,8 +174,8 @@ class AppsPage(Page):
             item.setData(0, Qt.ItemDataRole.UserRole, app)
             item.setData(1, Qt.ItemDataRole.UserRole, is_bloat)
             item.setData(2, Qt.ItemDataRole.UserRole, app.size_mb)
-            icon = sysicons.file_icon(getattr(app, "icon_path", ""))
-            item.setIcon(0, icon if not icon.isNull() else sysicons.generic_app_icon())
+            item.setIcon(0, sysicons.generic_app_icon())
+            pending.append(item)
             if not app.removable:
                 item.setDisabled(True)
                 item.setToolTip(0, "This entry cannot be uninstalled from here")
@@ -186,7 +188,15 @@ class AppsPage(Page):
         self._apply_sort()
         self._apply_filter()
         self._update_summary()
+        self._start_icon_loading(pending)
         self.mark_loaded()
+
+    # -- icons -----------------------------------------------------------
+    def _start_icon_loading(self, items: list) -> None:
+        self.icons.load(
+            (item, getattr(item.data(0, Qt.ItemDataRole.UserRole), "icon_path", ""))
+            for item in items
+        )
 
     def _on_failed(self, message: str) -> None:
         self._set_busy(False)

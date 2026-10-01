@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QFormLayout,
+    QVBoxLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -21,6 +22,7 @@ from ...core import platform as pf
 from ...core.format import human_duration, human_size
 from ...core.workers import submit
 from ...modules import cleaner, startup, systeminfo
+from .. import sysicons
 from ..context import AppContext
 from ..widgets import ProgressRow, status_icon
 from .base import Page
@@ -51,9 +53,45 @@ class DashboardPage(Page):
     # -- ui --------------------------------------------------------------
     def _build(self) -> None:
         top = QHBoxLayout()
+        top.setSpacing(12)
 
+        # --- health score -------------------------------------------------
+        score_box = QGroupBox("Health score")
+        score_layout = QVBoxLayout(score_box)
+        score_layout.setSpacing(6)
+
+        self.lbl_score = QLabel("—")
+        font = self.lbl_score.font()
+        font.setPointSizeF(max(28.0, font.pointSizeF() * 2.6))
+        font.setBold(True)
+        self.lbl_score.setFont(font)
+        self.lbl_score.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        score_layout.addWidget(self.lbl_score)
+
+        self.bar_score = QProgressBar()
+        self.bar_score.setRange(0, 100)
+        self.bar_score.setValue(0)
+        self.bar_score.setTextVisible(False)
+        score_layout.addWidget(self.bar_score)
+
+        self.lbl_verdict = QLabel("Running the first check…")
+        self.lbl_verdict.setWordWrap(True)
+        self.lbl_verdict.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        score_layout.addWidget(self.lbl_verdict)
+
+        self.lbl_counts = QLabel("")
+        self.lbl_counts.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.lbl_counts.setEnabled(False)
+        score_layout.addWidget(self.lbl_counts)
+        score_layout.addStretch(1)
+        top.addWidget(score_box, 1)
+
+        # --- this pc -------------------------------------------------------
         system_box = QGroupBox("This PC")
         system_form = QFormLayout(system_box)
+        system_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        system_form.setHorizontalSpacing(14)
+        system_form.setVerticalSpacing(8)
         self.lbl_os = QLabel("—")
         self.lbl_computer = QLabel("—")
         self.lbl_user = QLabel("—")
@@ -63,38 +101,67 @@ class DashboardPage(Page):
             ("Windows:", self.lbl_os),
             ("Computer:", self.lbl_computer),
             ("Signed in as:", self.lbl_user),
-            ("Uptime:", self.lbl_uptime),
+            ("Switched on for:", self.lbl_uptime),
             ("Running as:", self.lbl_mode),
         ):
             widget.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            widget.setWordWrap(True)
             system_form.addRow(label, widget)
-        top.addWidget(system_box, 1)
+        top.addWidget(system_box, 2)
 
+        # --- live meters ----------------------------------------------------
         live_box = QGroupBox("Right now")
         live_form = QFormLayout(live_box)
+        live_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        live_form.setHorizontalSpacing(14)
+        live_form.setVerticalSpacing(8)
         self.bar_cpu = QProgressBar()
         self.bar_ram = QProgressBar()
         self.bar_disk = QProgressBar()
+        for bar in (self.bar_cpu, self.bar_ram, self.bar_disk):
+            bar.setMinimumWidth(220)
         live_form.addRow("Processor:", self.bar_cpu)
         live_form.addRow("Memory:", self.bar_ram)
         live_form.addRow("System drive:", self.bar_disk)
         self.lbl_junk = QLabel("—")
         self.lbl_startup = QLabel("—")
         live_form.addRow("Junk files:", self.lbl_junk)
-        live_form.addRow("Startup programs:", self.lbl_startup)
-        top.addWidget(live_box, 1)
+        live_form.addRow("Starts with Windows:", self.lbl_startup)
+        top.addWidget(live_box, 2)
 
         self.layout_.addLayout(top)
 
+        # --- quick actions ---------------------------------------------------
+        actions_box = QGroupBox("Quick actions")
+        actions_layout = QHBoxLayout(actions_box)
+        actions_layout.setSpacing(8)
+        for label, page, tip in (
+            ("Free up space", "cleaner", "Find and delete junk files"),
+            ("Update everything", "updater", "Windows, your programs and Store apps"),
+            ("Trim startup", "startup", "Stop programs launching at login"),
+            ("Speed up Windows", "performance", "Reversible performance settings"),
+            ("Check security", "security", "Defender, firewall and hardening"),
+            ("Repair Windows", "repair", "SFC, DISM and the usual fixes"),
+        ):
+            button = QPushButton(label)
+            button.setToolTip(tip)
+            button.setIcon(sysicons.page_icon(page))
+            button.clicked.connect(lambda _checked=False, key=page: self.ctx.navigate(key))
+            actions_layout.addWidget(button)
+        actions_layout.addStretch(1)
+        self.layout_.addWidget(actions_box)
+
+        # --- checks -----------------------------------------------------------
         checks_box = QGroupBox("What needs attention")
-        checks_layout = QHBoxLayout(checks_box)
+        checks_layout = QVBoxLayout(checks_box)
         self.tree = QTreeWidget()
-        self.tree.setColumnCount(3)
-        self.tree.setHeaderLabels(["Check", "Result", "Detail"])
-        self.tree.setRootIsDecorated(False)
+        self.tree.setColumnCount(2)
+        self.tree.setHeaderLabels(["Check", "What WinX found"])
+        self.tree.setRootIsDecorated(True)
         self.tree.setAlternatingRowColors(True)
         self.tree.setUniformRowHeights(True)
-        self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.tree.setIconSize(QSize(20, 20))
+        self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.tree.itemSelectionChanged.connect(self._selection_changed)
         self.tree.itemActivated.connect(lambda *_: self._goto_fix())
         checks_layout.addWidget(self.tree)
@@ -104,8 +171,8 @@ class DashboardPage(Page):
         self.layout_.addWidget(self.progress)
 
         buttons = QHBoxLayout()
-        self.btn_refresh = QPushButton("Run checks again")
-        self.btn_refresh.clicked.connect(self.refresh)
+        self.btn_refresh = QPushButton("Run the checks again")
+        self.btn_refresh.clicked.connect(self.force_refresh)
         buttons.addWidget(self.btn_refresh)
 
         self.btn_fix = QPushButton("Fix selected…")
@@ -169,6 +236,15 @@ class DashboardPage(Page):
         info = payload["info"]
         self.progress.stop(f"{len(self.checks)} checks complete")
 
+        score = systeminfo.health_score(self.checks)
+        self.lbl_score.setText(f"{score['score']}")
+        self.bar_score.setValue(score["score"])
+        self.lbl_verdict.setText(score["verdict"])
+        self.lbl_counts.setText(
+            f"{score['problems']} to fix · {score['suggestions']} suggestions · "
+            f"{score['healthy']} fine"
+        )
+
         boot = info.get("boot_time") or 0
         self.lbl_os.setText(info.get("os", "—"))
         self.lbl_computer.setText(info.get("computer", "—"))
@@ -201,20 +277,38 @@ class DashboardPage(Page):
         self.progress.stop("Health checks failed")
         self.on_error(message)
 
+    #: status -> (heading, expanded by default)
+    GROUPS = [
+        ("fail", "Problems", True),
+        ("warn", "Worth fixing", True),
+        ("info", "Suggestions", True),
+        ("ok", "Looking good", False),
+    ]
+
     def _render_checks(self) -> None:
+        """Three short, labelled sections instead of one long status list."""
         self.tree.clear()
-        order = {"fail": 0, "warn": 1, "info": 2, "ok": 3}
-        for check in sorted(self.checks, key=lambda c: order.get(c["status"], 4)):
-            item = QTreeWidgetItem(
-                [check["name"], check["status"].upper(), check.get("detail", "")]
-            )
-            icon = status_icon(check["status"])
-            if icon:
-                item.setIcon(0, icon)
-            item.setData(0, Qt.ItemDataRole.UserRole, check.get("fix"))
-            self.tree.addTopLevelItem(item)
+        for status, heading, expanded in self.GROUPS:
+            rows = [c for c in self.checks if c.get("status") == status]
+            if not rows:
+                continue
+            parent = QTreeWidgetItem([f"{heading}  ({len(rows)})", ""])
+            font = parent.font(0)
+            font.setBold(True)
+            parent.setFont(0, font)
+            parent.setIcon(0, status_icon(status))
+            parent.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self.tree.addTopLevelItem(parent)
+            for check in rows:
+                item = QTreeWidgetItem([check["name"], check.get("detail", "")])
+                item.setIcon(0, status_icon(status))
+                fix = check.get("fix")
+                item.setData(0, Qt.ItemDataRole.UserRole, fix)
+                if fix:
+                    item.setToolTip(1, f"Double-click to open {fix[1]}")
+                parent.addChild(item)
+            parent.setExpanded(expanded)
         self.tree.resizeColumnToContents(0)
-        self.tree.resizeColumnToContents(1)
 
     def _selection_changed(self) -> None:
         item = self.tree.currentItem()
@@ -246,7 +340,8 @@ class DashboardPage(Page):
         usage = systeminfo.system_drive_usage()
         if usage:
             self.bar_disk.setValue(usage["percent"])
-            self.bar_disk.setFormat(f"%p% used — {human_size(usage['free'])} free on {usage['drive']}")
+            self.bar_disk.setFormat(f"%p% used · {human_size(usage['free'])} free")
+            self.bar_disk.setToolTip(f"{usage['drive']} — {human_size(usage['free'])} free")
 
     # The meters only matter while the page is on screen; polling psutil (and
     # repainting) behind a hidden page is pure overhead.

@@ -19,6 +19,7 @@ from winx.core.simdata import seeded_registry  # noqa: E402
 OUT = sys.argv[1] if len(sys.argv) > 1 else "screenshots"
 PAGES = [
     "dashboard",
+    "updater",
     "cleaner",
     "performance",
     "startup",

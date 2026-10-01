@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QSize, QStringListModel, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QCompleter,
@@ -36,6 +36,7 @@ from .pages.drivers import DriversPage
 from .pages.settings import SettingsPage
 from .pages.startup import StartupPage
 from .pages.systeminfo import SystemInfoPage
+from .pages.updater import UpdaterPage
 from .pages.tweaks import TweaksPage
 from .widgets import LogConsole
 
@@ -45,6 +46,7 @@ NAV_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ("Overview", [
         ("dashboard", "Dashboard"),
         ("systeminfo", "System"),
+        ("updater", "Updater"),
     ]),
     ("Clean up", [
         ("cleaner", "Cleaner"),
@@ -95,34 +97,137 @@ ACTION_PAGE = {
 }
 
 
-def search_index() -> list[tuple[str, str, str]]:
-    """Everything the toolbar search can jump to: ``(label, page key, term)``.
-
-    Pages, tweaks and tasks all end up in one list so a user who types
-    "telemetry" or "defragment" lands on the right page with the page's own
-    filter already applied.
-    """
-    from ..modules import actions_data, tweaks_data
-
-    entries: list[tuple[str, str, str]] = []
-    for key, label in NAV_ITEMS:
-        entries.append((label, key, ""))
-    for tweak in tweaks_data.ALL_TWEAKS:
-        page = TWEAK_PAGE.get(tweak.category)
-        if page:
-            entries.append((f"{tweak.name} — {label_for(page)}", page, tweak.name))
-    for action in actions_data.ALL_ACTIONS:
-        page = ACTION_PAGE.get(action.group)
-        if page:
-            entries.append((f"{action.name} — {label_for(page)}", page, action.name))
-    return entries
-
-
 def label_for(key: str) -> str:
     for page_key, label in NAV_ITEMS:
         if page_key == key:
             return label
     return key
+
+
+#: extra words people actually type, per page, so plain English finds things
+PAGE_KEYWORDS = {
+    "dashboard": "health score overview home status check my pc",
+    "systeminfo": "specs hardware cpu ram gpu serial report what do i have",
+    "cleaner": "junk temp free up space delete cache clean disk full",
+    "apps": "uninstall remove program bloatware installed software app size",
+    "disks": "storage drive space smart defrag trim duplicates big files",
+    "performance": "speed up faster slow lag boot time responsiveness",
+    "gaming": "games fps game bar dvr recording latency",
+    "startup": "boot autostart login programs services slow startup",
+    "repair": "fix broken sfc dism corrupt stuck component store health",
+    "network": "internet wifi dns ip connection slow web proxy",
+    "drivers": "device hardware driver update problem unknown device",
+    "privacy": "telemetry tracking ads cortana data collection spying",
+    "security": "defender antivirus firewall malware scan harden protection",
+    "interface": "explorer taskbar start menu dark mode appearance look",
+    "tools": "launch control panel services msconfig utilities shortcuts",
+    "updater": "update upgrade winget windows update store patch newer version",
+    "settings": "preferences options backup history undo theme size font",
+}
+
+
+class SearchEntry:
+    """One thing the toolbar search can take you to."""
+
+    __slots__ = ("label", "key", "term", "haystack", "weight")
+
+    def __init__(self, label: str, key: str, term: str, extra: str = "", weight: float = 1.0):
+        self.label = label
+        self.key = key
+        self.term = term
+        self.haystack = f"{label} {extra}".lower()
+        self.weight = weight
+
+
+def search_index() -> list[SearchEntry]:
+    """Pages, tweaks and tasks in one searchable list."""
+    from ..modules import actions_data, tweaks_data
+
+    entries: list[SearchEntry] = []
+    for key, label in NAV_ITEMS:
+        entries.append(
+            SearchEntry(label, key, "", PAGE_KEYWORDS.get(key, ""), weight=2.0)
+        )
+    for tweak in tweaks_data.ALL_TWEAKS:
+        page = TWEAK_PAGE.get(tweak.category)
+        if page:
+            entries.append(
+                SearchEntry(
+                    f"{tweak.name} — {label_for(page)}",
+                    page,
+                    tweak.name,
+                    f"{tweak.description} {' '.join(tweak.tags)}",
+                )
+            )
+    for action in actions_data.ALL_ACTIONS:
+        page = ACTION_PAGE.get(action.group)
+        if page:
+            entries.append(
+                SearchEntry(
+                    f"{action.name} — {label_for(page)}",
+                    page,
+                    action.name,
+                    action.description,
+                )
+            )
+    return entries
+
+
+def score_entry(entry: SearchEntry, needle: str) -> float:
+    """How well ``entry`` matches what was typed. 0 means "not at all".
+
+    Deliberately simple and explainable: whole-phrase hits beat per-word hits,
+    per-word hits beat a fuzzy subsequence, and a hit in the title beats one in
+    the description.
+    """
+    if not needle:
+        return 0.0
+    label = entry.label.lower()
+    hay = entry.haystack
+
+    score = 0.0
+    if label.startswith(needle):
+        score = 100.0
+    elif needle in label:
+        score = 70.0
+    elif needle in hay:
+        score = 45.0
+
+    if not score:
+        words = [w for w in needle.split() if w]
+        if words and all(w in hay for w in words):
+            score = 35.0 + 3.0 * len(words)
+        elif _subsequence(needle.replace(" ", ""), label.replace(" ", "")):
+            score = 20.0
+
+    if not score:
+        return 0.0
+    # shorter labels are usually the more direct answer
+    score += entry.weight * 5.0
+    score -= min(len(entry.label), 60) * 0.05
+    return score
+
+
+def _subsequence(needle: str, hay: str) -> bool:
+    """True when every character of ``needle`` appears in order in ``hay``."""
+    if not needle:
+        return False
+    position = 0
+    for char in needle:
+        position = hay.find(char, position) + 1
+        if position == 0:
+            return False
+    return True
+
+
+def search_results(entries, needle: str, limit: int = 12) -> list[SearchEntry]:
+    needle = (needle or "").strip().lower()
+    if not needle:
+        return []
+    scored = [(score_entry(e, needle), e) for e in entries]
+    scored = [(s, e) for s, e in scored if s > 0]
+    scored.sort(key=lambda pair: (-pair[0], len(pair[1].label)))
+    return [e for _s, e in scored[:limit]]
 
 
 class MainWindow(QMainWindow):
@@ -208,6 +313,31 @@ class MainWindow(QMainWindow):
         bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.addToolBar(bar)
 
+        # search sits on the left, where the eye lands first
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search WinX — try “free up space” (Ctrl+F)")
+        self.search.setClearButtonEnabled(True)
+        self.search.setMinimumWidth(320)
+        self.search.setMaximumWidth(460)
+        self.search.addAction(
+            style.standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView),
+            QLineEdit.ActionPosition.LeadingPosition,
+        )
+
+        self._search_entries = search_index()
+        self._search_model = QStringListModel([], self)
+        completer = QCompleter(self._search_model, self)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        # the list is already ranked, so Qt must not re-filter it
+        completer.setCompletionMode(QCompleter.CompletionMode.UnfilteredPopupCompletion)
+        completer.setMaxVisibleItems(12)
+        completer.activated.connect(self._search_chosen)
+        self.search.setCompleter(completer)
+        self.search.textEdited.connect(self._search_typed)
+        self.search.returnPressed.connect(lambda: self._search_chosen(self.search.text()))
+        bar.addWidget(self.search)
+
+        bar.addSeparator()
         refresh = QAction(
             style.standardIcon(QStyle.StandardPixmap.SP_BrowserReload), "Refresh", self
         )
@@ -216,27 +346,15 @@ class MainWindow(QMainWindow):
         bar.addAction(refresh)
 
         spacer = QWidget()
-        spacer.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         bar.addWidget(spacer)
 
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Search WinX — pages, tweaks and tasks (Ctrl+F)")
-        self.search.setClearButtonEnabled(True)
-        self.search.setMinimumWidth(360)
-        self.search.setMaximumWidth(520)
-
-        self._search_entries = search_index()
-        completer = QCompleter([label for label, _key, _term in self._search_entries], self)
-        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        completer.setFilterMode(Qt.MatchFlag.MatchContains)
-        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
-        completer.setMaxVisibleItems(12)
-        completer.activated.connect(self._search_chosen)
-        self.search.setCompleter(completer)
-        self.search.returnPressed.connect(lambda: self._search_chosen(self.search.text()))
-        bar.addWidget(self.search)
+        self.updates_action = QAction(
+            style.standardIcon(QStyle.StandardPixmap.SP_ArrowDown), "Updates", self
+        )
+        self.updates_action.setToolTip("Update Windows, your programs and WinX")
+        self.updates_action.triggered.connect(lambda: self._goto("updater"))
+        bar.addAction(self.updates_action)
 
     # ------------------------------------------------------------------
     def _build_log_dock(self) -> None:
@@ -491,30 +609,30 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # search
     # ------------------------------------------------------------------
+    def _search_typed(self, text: str) -> None:
+        """Re-rank the suggestions as the user types."""
+        results = search_results(self._search_entries, text)
+        self._search_model.setStringList([entry.label for entry in results])
+        if results:
+            self.search.completer().complete()
+
     def _search_chosen(self, text: str) -> None:
         text = (text or "").strip()
         if not text:
             return
         lowered = text.lower()
-        match = None
-        for label, key, term in self._search_entries:
-            if label.lower() == lowered:
-                match = (key, term)
-                break
-        if match is None:                      # free text: best substring hit
-            for label, key, term in self._search_entries:
-                if lowered in label.lower():
-                    match = (key, term)
-                    break
+        match = next((e for e in self._search_entries if e.label.lower() == lowered), None)
+        if match is None:
+            ranked = search_results(self._search_entries, text, limit=1)
+            match = ranked[0] if ranked else None
         if match is None:
             self.status(f"Nothing in WinX matches “{text}”")
             return
 
-        key, term = match
-        self._goto(key)
-        page = self.pages.get(key)
-        if term and hasattr(page, "focus_search"):
-            page.focus_search(term)
+        self._goto(match.key)
+        page = self.pages.get(match.key)
+        if match.term and hasattr(page, "focus_search"):
+            page.focus_search(match.term)
         self.search.clear()
 
     def focus_search(self) -> None:
@@ -698,5 +816,6 @@ PAGE_FACTORIES = {
     "security": _security,
     "interface": _interface,
     "tools": ToolsPage,
+    "updater": UpdaterPage,
     "settings": SettingsPage,
 }

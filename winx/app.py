@@ -118,6 +118,7 @@ class WinX:
         # light/dark is Qt's own colour scheme, so the platform style keeps
         # drawing native widgets — WinX never paints its own theme.
         appearance.apply_saved(self.settings)
+        appearance.apply_saved_scale(self.settings)
 
         self.window = MainWindow(self.ctx)
         last = self.settings.str("ui/last_page")

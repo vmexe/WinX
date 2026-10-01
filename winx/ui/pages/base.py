@@ -4,7 +4,16 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ...core.format import human_age as age_text
 from ..context import AppContext
@@ -28,10 +37,15 @@ class Page(QWidget):
         self._loaded_at = 0.0
         self.updated_label: QLabel | None = None
 
+        # Breathing room: Qt's defaults are tight, and these pages carry a lot
+        # of controls. One place sets it for every page so they all match.
         self.layout_ = QVBoxLayout(self)
+        self.layout_.setContentsMargins(16, 14, 16, 14)
+        self.layout_.setSpacing(10)
         if self.subtitle:
             caption = QLabel(self.subtitle)
             caption.setWordWrap(True)
+            caption.setContentsMargins(0, 0, 0, 4)
             self.layout_.addWidget(caption)
 
     # -- lifecycle -------------------------------------------------------
@@ -61,6 +75,26 @@ class Page(QWidget):
     def invalidate(self) -> None:
         self._dirty = True
 
+    def scrollable_body(self, spacing: int = 12) -> QVBoxLayout:
+        """Put everything added from here on inside a scroll area.
+
+        Long pages (Settings, the Dashboard at a large interface size) used to
+        squash their group boxes into each other when the window was short.
+        A scroll area is what Windows itself does with long settings pages.
+        """
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        inner = QWidget()
+        body = QVBoxLayout(inner)
+        body.setContentsMargins(0, 0, 8, 0)      # room for the scrollbar
+        body.setSpacing(spacing)
+        area.setWidget(inner)
+        self.layout_.addWidget(area, 1)
+        self.scroll_area = area
+        self.layout_ = body
+        return body
+
     # -- cache bookkeeping -----------------------------------------------
     def mark_loaded(self) -> None:
         """Pages call this once their data has arrived."""
@@ -81,6 +115,7 @@ class Page(QWidget):
     def cache_row(self, refresh_text: str = "Refresh") -> QHBoxLayout:
         """A reusable 'Updated 2 minutes ago   [Refresh]' row."""
         row = QHBoxLayout()
+        row.setSpacing(8)
         self.updated_label = QLabel("")
         self.updated_label.setEnabled(False)
         row.addWidget(self.updated_label)

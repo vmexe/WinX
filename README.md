@@ -29,7 +29,8 @@ python main.py --version
 | **Light or dark, your choice** | *Settings → Appearance* (or *View → Appearance*) switches between **Follow Windows / Light / Dark** using Qt's own colour scheme, so the native style simply redraws itself — there is still no WinX theme. |
 | **Finding things** | One search box in the toolbar (**Ctrl+F**) covers pages, all 85 tweaks and all 59 tasks; picking a result opens the page with its own filter already applied. The navigation is a collapsible tree — no disabled rows. |
 | **Not re-scanning** | Each page keeps its last result and shows *“Updated 3 minutes ago”* with a Refresh button; re-opening the Uninstaller, Disks or Drivers is instant. `tools/uicheck.py` fails the build if a page re-scans on re-open. |
-| **Staying current** | *Help → Check for updates* (and an optional startup check) reads the latest GitHub release; the packaged `WinX.exe` can download and install it, then relaunch. |
+| **Staying current** | The **Updater** page updates Windows, your programs (winget) and Store apps from one list; *Help → Check for updates* does the same for WinX itself, and the packaged `WinX.exe` can install its own update and relaunch. |
+| **Fits your eyes** | *Settings → Appearance* has an **interface size** slider (80–180%) that scales every window, button and row by resizing the system font WinX inherits — no custom font, no stylesheet. |
 | **Testability** | The engine has no widget dependencies, so `python main.py --selftest` applies real changes, verifies them, undoes them and checks every module — on Windows *and* on Linux/macOS in simulation mode. |
 
 ---
@@ -37,7 +38,10 @@ python main.py --version
 ## What it does
 
 ### Dashboard
-Health score built from live checks (disk space, SMART, memory pressure, uptime, junk
+A **health score out of 100** with a plain-English verdict, quick-action buttons
+(*Free up space*, *Update everything*, *Trim startup*, *Speed up Windows*, *Check
+security*, *Repair Windows*) and findings grouped into **Problems / Worth fixing /
+Suggestions / Looking good**. Built from live checks (disk space, SMART, memory pressure, uptime, junk
 size, startup count, telemetry, SmartScreen, Remote Desktop, Defender, firewall),
 live CPU/RAM/disk meters, and “what needs attention” rows that jump straight to the
 page that fixes them.
@@ -88,6 +92,13 @@ minimum-size slider and sorting by name, size, publisher or source, bloatware de
 curated pattern list (Candy Crush, TikTok, Spotify, Disney+, Clipchamp, Xbox extras…),
 batch uninstall, and generated silent uninstall commands (`msiexec /X{ guid } /qn`,
 `Remove-AppxPackage`, provisioned‑package cleanup, winget as a fallback).
+
+### Updater
+One list for everything that is out of date: **Windows Update** (read and installed
+through the same COM API the Settings app uses), **programs** via `winget upgrade`,
+and a **Microsoft Store** update scan — with sizes, "needs a restart" and "needs
+administrator" notes, a recently-installed history tab, and a button to check for a
+new WinX.
 
 ### Disks & drivers
 Volume usage + media type + health, SMART reliability counters, TRIM/defrag per volume,
@@ -143,11 +154,13 @@ winx/
     tweaks_data.py          the 85 tweak definitions
     actions_data.py         the 59 one-shot tasks
     cleaner.py  startup.py  apps.py  disks.py  drivers.py  systeminfo.py
+    updater.py              winget upgrades, Windows Update, Store update scan
   ui/
     main_window.py          navigation tree, global search, page stack, menus,
                             status bar, log dock, update checker
-    appearance.py           light / dark / follow-Windows via Qt's colour scheme
-    sysicons.py             shell icons (SHGetFileInfoW) + standard style pixmaps
+    appearance.py           light / dark / follow-Windows + interface size
+    sysicons.py             shell icons (SHGetFileInfoW / ExtractIconExW), the
+                            icons Windows uses for its own tools, chunked loading
     widgets.py              progress row + log console (plain Qt, no styling)
     pages/                  dashboard, cleaner, tweaks, repair, network, startup,
                             privacy, security, interface, gaming, apps, disks,

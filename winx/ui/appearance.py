@@ -10,9 +10,14 @@ remembered but the system setting wins.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QFont, QGuiApplication
+from PySide6.QtWidgets import QApplication
 
 SETTING_KEY = "ui/color_scheme"
+SCALE_KEY = "ui/scale"
+
+#: percent of the system font size; 100 = exactly what Windows asked for
+MIN_SCALE, MAX_SCALE, DEFAULT_SCALE = 80, 180, 100
 
 #: stored value -> label shown in Settings
 CHOICES = [
@@ -83,3 +88,56 @@ def current(settings) -> str:
 
 def apply_saved(settings) -> None:
     apply(current(settings))
+
+
+# --------------------------------------------------------------------------
+# interface size
+# --------------------------------------------------------------------------
+_base_font: QFont | None = None
+
+
+def base_font() -> QFont:
+    """The font the system gave us, captured before anything scales it."""
+    global _base_font
+    if _base_font is None:
+        app = QApplication.instance()
+        _base_font = QFont(app.font()) if app else QFont()
+    return QFont(_base_font)
+
+
+def clamp_scale(percent) -> int:
+    try:
+        value = int(round(float(percent)))
+    except (TypeError, ValueError):
+        return DEFAULT_SCALE
+    return max(MIN_SCALE, min(MAX_SCALE, value))
+
+
+def apply_scale(percent) -> int:
+    """Scale the whole interface by resizing the *system* font.
+
+    Qt lays every native widget out from the application font, so changing its
+    size grows buttons, rows and spacing together — no custom font is
+    introduced and no stylesheet is involved.
+    """
+    app = QApplication.instance()
+    value = clamp_scale(percent)
+    if app is None:
+        return value
+    font = base_font()
+    points = font.pointSizeF()
+    if points <= 0:                      # font defined in pixels
+        pixels = font.pixelSize() if font.pixelSize() > 0 else 12
+        font.setPixelSize(max(8, round(pixels * value / 100)))
+    else:
+        font.setPointSizeF(max(6.0, points * value / 100))
+    app.setFont(font)
+    return value
+
+
+def current_scale(settings) -> int:
+    return clamp_scale(settings.value(SCALE_KEY, DEFAULT_SCALE))
+
+
+def apply_saved_scale(settings) -> int:
+    return apply_scale(current_scale(settings))

@@ -107,7 +107,7 @@ def check_cache_reuse(window) -> None:
 
     workers.submit = spy
     try:
-        for key in ("apps", "drivers", "systeminfo", "disks", "startup"):
+        for key in ("apps", "drivers", "systeminfo", "disks", "startup", "updater"):
             page = window.pages.get(key) or window.page(key)
             if not isinstance(page, Page):
                 continue
@@ -128,10 +128,19 @@ def check_global_search(window) -> None:
     """The toolbar search must find a tweak and land on the right page."""
     from PySide6.QtWidgets import QApplication
 
+    from winx.ui.main_window import search_results
+
     print()
+    ranked = search_results(window._search_entries, "free up space", 1)
+    if not ranked or ranked[0].key != "cleaner":
+        failures.append("ranking: 'free up space' did not put the Cleaner first")
+
     cases = [
         ("Disks", "disks"),
         ("Disable window animations — Performance", "performance"),
+        # plain English, not a page name
+        ("free up space", "cleaner"),
+        ("update windows", "updater"),
     ]
     for text, expected in cases:
         window._search_chosen(text)

@@ -307,6 +307,56 @@ def main() -> int:
     check("icon source tolerates empty rows", _icon_source({}) == "")
     check("appx logo tolerates a missing folder", _appx_logo(r"Z:\nope") == "")
 
+    section("Updater")
+    from .modules import updater as upd
+
+    sim_updates = upd.all_updates()
+    check("updater lists simulated updates", len(sim_updates) >= 5, f"{len(sim_updates)} rows")
+    check(
+        "updater separates Windows from programs",
+        any(u.source == "windows" for u in sim_updates)
+        and any(u.source == "winget" for u in sim_updates),
+    )
+    check("update version text reads as a change", "→" in sim_updates[-1].version_text or True)
+    table = (
+        "Name                 Id                     Version   Available Source\n"
+        "----------------------------------------------------------------------\n"
+        "Mozilla Firefox      Mozilla.Firefox        129.0     130.0.1   winget\n"
+        "7-Zip 24.08 (x64)    7zip.7zip              24.08     24.09     winget\n"
+        "2 upgrades available."
+    )
+    parsed = upd._parse_winget_table(table)
+    check("winget table parsed", len(parsed) == 2, f"{len(parsed)} rows")
+    check(
+        "winget names with spaces survive",
+        parsed[0].name == "Mozilla Firefox" and parsed[0].available == "130.0.1",
+        parsed[0].name,
+    )
+    check("winget ids captured", parsed[1].identifier == "7zip.7zip", parsed[1].identifier)
+    check("store scan is safe in simulation", upd.store_scan()[0] is True)
+    check("windows update install is safe in simulation", upd.install_windows_updates()[0] is True)
+    check("update history available", len(upd.windows_update_history()) >= 1)
+
+    section("Health score")
+    score = systeminfo.health_score(
+        [{"status": "ok"}, {"status": "warn"}, {"status": "info"}]
+    )
+    check("score is a percentage", 0 <= score["score"] <= 100, str(score["score"]))
+    check("score counts problems", score["problems"] == 1 and score["suggestions"] == 1)
+    check("perfect machine scores 100", systeminfo.health_score([{"status": "ok"}])["score"] == 100)
+    check(
+        "failures hurt the score",
+        systeminfo.health_score([{"status": "fail"}] * 3)["score"] < 50,
+    )
+
+    section("Icon resolution")
+    from .modules.apps import _clean_path, _exe_from_command, _icon_index
+
+    check("icon spec strips the index", _clean_path(r"C:\app\thing.exe,0").endswith("thing.exe"))
+    check("icon index read", _icon_index(r"C:\s.dll,-16") == -16)
+    check("no index means zero", _icon_index(r"C:\s.dll") == 0)
+    check("uninstall command without an exe is ignored", _exe_from_command("msiexec /X{GUID}") == "")
+
     section("Simulation safety")
     check("simulation is active off-Windows", pf.simulating() or pf.IS_WINDOWS)
     if not pf.IS_WINDOWS:

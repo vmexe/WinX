@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QSlider,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -34,6 +35,7 @@ class SettingsPage(Page):
 
     def __init__(self, ctx: AppContext):
         super().__init__(ctx)
+        self.scrollable_body()
 
         self.layout_.addWidget(self._appearance_group())
 
@@ -73,6 +75,8 @@ class SettingsPage(Page):
         self.tree.setRootIsDecorated(False)
         self.tree.setAlternatingRowColors(True)
         self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.tree.setMinimumHeight(140)
+        self.tree.setMaximumHeight(260)
         history_layout.addWidget(self.tree, 1)
 
         history_buttons = QHBoxLayout()
@@ -90,7 +94,7 @@ class SettingsPage(Page):
         self.btn_reload.clicked.connect(self.refresh)
         history_buttons.addWidget(self.btn_reload)
         history_layout.addLayout(history_buttons)
-        self.layout_.addWidget(history, 1)
+        self.layout_.addWidget(history)
 
         folders = QGroupBox("Folders")
         folders_layout = QVBoxLayout(folders)
@@ -107,6 +111,7 @@ class SettingsPage(Page):
         )
         about.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.layout_.addWidget(about)
+        self.layout_.addStretch(1)
 
     # -- appearance ------------------------------------------------------
     def _appearance_group(self) -> QGroupBox:
@@ -131,7 +136,38 @@ class SettingsPage(Page):
         hint.setEnabled(False)
         form.addRow("", hint)
         self.combo_scheme.setEnabled(appearance.supported())
+
+        size_row = QHBoxLayout()
+        self.slider_scale = QSlider(Qt.Orientation.Horizontal)
+        self.slider_scale.setRange(appearance.MIN_SCALE, appearance.MAX_SCALE)
+        self.slider_scale.setSingleStep(5)
+        self.slider_scale.setPageStep(10)
+        self.slider_scale.setTickInterval(20)
+        self.slider_scale.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.slider_scale.setValue(appearance.current_scale(self.ctx.settings))
+        self.slider_scale.valueChanged.connect(self._scale_changed)
+        size_row.addWidget(self.slider_scale, 1)
+        self.lbl_scale = QLabel(f"{self.slider_scale.value()}%")
+        self.lbl_scale.setMinimumWidth(56)
+        size_row.addWidget(self.lbl_scale)
+        reset = QPushButton("Reset")
+        reset.clicked.connect(lambda: self.slider_scale.setValue(appearance.DEFAULT_SCALE))
+        size_row.addWidget(reset)
+        form.addRow("Interface size:", size_row)
+
+        size_hint = QLabel(
+            "Makes every window, button and list row bigger or smaller by scaling the "
+            "system font WinX inherits. Takes effect as you drag."
+        )
+        size_hint.setWordWrap(True)
+        size_hint.setEnabled(False)
+        form.addRow("", size_hint)
         return box
+
+    def _scale_changed(self, value: int) -> None:
+        applied = appearance.apply_scale(value)
+        self.lbl_scale.setText(f"{applied}%")
+        self.ctx.settings.set(appearance.SCALE_KEY, applied)
 
     def _scheme_changed(self, _index: int) -> None:
         value = self.combo_scheme.currentData()

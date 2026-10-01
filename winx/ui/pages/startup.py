@@ -53,6 +53,7 @@ class StartupPage(Page):
     def __init__(self, ctx: AppContext):
         super().__init__(ctx)
         self.items: list[startup.StartupItem] = []
+        self.icons = sysicons.IconLoader(self, size=24)
 
         self.layout_.addLayout(self.cache_row("Re-scan"))
 
@@ -166,6 +167,7 @@ class StartupPage(Page):
 
         self.tree.setSortingEnabled(False)
         self.tree.clear()
+        pending: list[tuple[object, str]] = []
         for item in items:
             row = QTreeWidgetItem(
                 [
@@ -177,8 +179,8 @@ class StartupPage(Page):
                 ]
             )
             row.setData(0, Qt.ItemDataRole.UserRole, item)
-            icon = sysicons.file_icon(_executable_of(item.command))
-            row.setIcon(0, icon if not icon.isNull() else sysicons.generic_app_icon())
+            row.setIcon(0, sysicons.generic_app_icon())
+            pending.append((row, _executable_of(item.command)))
             self.tree.addTopLevelItem(row)
         self.tree.setSortingEnabled(True)
         self.tree.resizeColumnToContents(0)
@@ -201,6 +203,7 @@ class StartupPage(Page):
         self.progress.stop("")
         self.status("Startup list updated")
         self._apply_filter()
+        self.icons.load(pending)
         self.mark_loaded()
 
     def _apply_filter(self, *_args) -> None:

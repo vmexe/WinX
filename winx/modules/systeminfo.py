@@ -388,6 +388,48 @@ def health_checks(
     return checks
 
 
+#: how much each problem costs the health score
+SCORE_PENALTY = {"fail": 20, "warn": 9, "info": 2, "ok": 0}
+
+
+def health_score(checks: list[dict]) -> dict:
+    """Turn the check list into one number people can act on.
+
+    Returns ``{score, verdict, problems, suggestions, healthy}``. The score is
+    deliberately blunt — a failing check costs a lot, a suggestion costs very
+    little — so "96" really does mean "nothing to do here".
+    """
+    score = 100
+    problems = suggestions = healthy = 0
+    for check in checks or []:
+        status = check.get("status", "info")
+        score -= SCORE_PENALTY.get(status, 0)
+        if status == "fail":
+            problems += 1
+        elif status == "warn":
+            problems += 1
+        elif status == "info":
+            suggestions += 1
+        else:
+            healthy += 1
+    score = max(0, min(100, score))
+    if score >= 90:
+        verdict = "This PC looks healthy"
+    elif score >= 75:
+        verdict = "A few things are worth a look"
+    elif score >= 50:
+        verdict = "Several things need attention"
+    else:
+        verdict = "This PC needs attention now"
+    return {
+        "score": score,
+        "verdict": verdict,
+        "problems": problems,
+        "suggestions": suggestions,
+        "healthy": healthy,
+    }
+
+
 def _reboot_pending() -> bool:
     for hive, path, name in (
         ("HKLM", r"SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing", "RebootPending"),

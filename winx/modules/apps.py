@@ -200,52 +200,219 @@ def installed_apps(progress: Callable[[int, int, str], None] | None = None) -> l
     return apps
 
 
-def _icon_source(row: dict) -> str:
-    """Best guess at a file the shell can render an icon for.
+def _clean_path(raw: str) -> str:
+    """Strip quotes, an icon index and stray whitespace off a registry path."""
+    value = (raw or "").strip().strip('"').strip()
+    if not value:
+        return ""
+    # "C:\\app\\thing.exe,0" / "C:\\app\\thing.dll,-12"
+    head, _sep, tail = value.rpartition(",")
+    if head and tail.strip().lstrip("-").isdigit():
+        value = head
+    return pf.expand(value.strip().strip('"'))
 
-    ``DisplayIcon`` is usually ``C:\\path\\app.exe,0`` but is sometimes missing,
-    in which case the installation folder's main executable is good enough.
-    """
-    raw = text(row.get("DisplayIcon")).strip().strip('"')
-    if raw:
-        path = raw.split(",")[0].strip().strip('"')
-        if path and os.path.exists(path):
-            return path
-    location = text(row.get("InstallLocation")).strip().strip('"')
-    if location and os.path.isdir(location):
+
+def _icon_index(raw: str) -> int:
+    head, _sep, tail = (raw or "").rpartition(",")
+    if head and tail.strip().lstrip("-").isdigit():
+        return int(tail)
+    return 0
+
+
+def _exe_from_command(command: str) -> str:
+    """Pull the program out of an uninstall command line."""
+    value = (command or "").strip()
+    if not value:
+        return ""
+    if value.startswith('"'):
+        candidate = value[1:].split('"', 1)[0]
+    else:
+        lowered = value.lower()
+        cut = len(value)
+        for marker in (".exe ", ".exe\t"):
+            found = lowered.find(marker)
+            if found != -1:
+                cut = min(cut, found + 4)
+        candidate = value[:cut]
+    candidate = pf.expand(candidate.strip().strip('"'))
+    return candidate if candidate.lower().endswith(".exe") and os.path.isfile(candidate) else ""
+
+
+def _app_paths_exe(name: str) -> str:
+    """Ask the shell's App Paths registry where a program lives."""
+    if not pf.IS_WINDOWS or not name:
+        return ""
+    try:
+        import winreg
+    except ImportError:
+        return ""
+    key_name = name if name.lower().endswith(".exe") else f"{name}.exe"
+    for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
         try:
-            exes = sorted(
-                (e for e in os.scandir(location) if e.is_file() and e.name.lower().endswith(".exe")),
-                key=lambda e: e.stat().st_size,
-                reverse=True,
-            )
+            with winreg.OpenKey(
+                root, rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{key_name}"
+            ) as key:
+                value, _kind = winreg.QueryValueEx(key, "")
+                path = pf.expand(str(value).strip('"'))
+                if os.path.isfile(path):
+                    return path
         except OSError:
-            return ""
-        if exes:
-            return exes[0].path
+            continue
     return ""
 
 
-def _appx_logo(install_location: str) -> str:
-    """The largest pre-rendered logo shipped inside a Store package."""
-    location = (install_location or "").strip().strip('"')
-    if not location or not os.path.isdir(location):
+def _best_exe_in(folder: str, hint: str = "") -> str:
+    """The executable in ``folder`` most likely to carry the program's icon.
+
+    Prefers a name that looks like the program ("Spotify.exe" for Spotify),
+    then the biggest executable, and ignores the usual helpers.
+    """
+    if not folder or not os.path.isdir(folder):
         return ""
-    assets = os.path.join(location, "Assets")
-    folder = assets if os.path.isdir(assets) else location
-    best, best_size = "", 0
+    skip = ("unins", "setup", "install", "update", "crashpad", "helper", "repair", "vcredist")
+    words = [w for w in re.split(r"[^a-z0-9]+", (hint or "").lower()) if len(w) > 2]
+    best, best_score = "", (-1, -1)
     try:
-        for entry in os.scandir(folder):
-            name = entry.name.lower()
-            if not name.endswith(".png") or not entry.is_file():
-                continue
-            if not any(tag in name for tag in ("logo", "icon", "square", "tile")):
-                continue
-            size = entry.stat().st_size
-            if size > best_size:
-                best, best_size = entry.path, size
+        entries = list(os.scandir(folder))
     except OSError:
         return ""
+    for entry in entries:
+        name = entry.name.lower()
+        if not name.endswith(".exe") or not entry.is_file():
+            continue
+        if any(bad in name for bad in skip):
+            continue
+        try:
+            size = entry.stat().st_size
+        except OSError:
+            size = 0
+        matched = any(word in name for word in words)
+        score = (1 if matched else 0, size)
+        if score > best_score:
+            best, best_score = entry.path, score
+    return best
+
+
+def _icon_source(row: dict) -> str:
+    """Best guess at a file the shell can draw an icon for.
+
+    Installers are inconsistent: some write ``DisplayIcon``, some point it at a
+    file that no longer exists, some only leave an ``InstallLocation`` and some
+    leave nothing but the uninstall command. Each of those is tried in turn so
+    the Uninstaller shows a real icon for as many rows as possible.
+    """
+    name = text(row.get("DisplayName"))
+
+    raw_icon = text(row.get("DisplayIcon"))
+    path = _clean_path(raw_icon)
+    if path and os.path.exists(path):
+        return raw_icon.strip().strip('"') if _icon_index(raw_icon) else path
+
+    location = _clean_path(text(row.get("InstallLocation")))
+    candidate = _best_exe_in(location, name)
+    if candidate:
+        return candidate
+
+    for command in (text(row.get("QuietUninstallString")), text(row.get("UninstallString"))):
+        exe = _exe_from_command(command)
+        if exe and "unins" not in os.path.basename(exe).lower():
+            return exe
+        if exe:
+            # an uninstaller lives next to the program it removes
+            sibling = _best_exe_in(os.path.dirname(exe), name)
+            if sibling:
+                return sibling
+
+    exe = _app_paths_exe(name.replace(" ", ""))
+    if exe:
+        return exe
+
+    # last resort: the install folder itself still gives the shell something
+    return location if location and os.path.isdir(location) else ""
+
+
+#: how Store packages name their logos, best (largest) first
+_APPX_LOGO_HINTS = (
+    "logo.targetsize-256",
+    "logo.targetsize-96",
+    "logo.scale-200",
+    "logo.scale-100",
+    "square150x150logo",
+    "square44x44logo",
+    "storelogo",
+)
+
+
+def _appx_logo(install_location: str) -> str:
+    """The best pre-rendered logo shipped inside a Store package.
+
+    The manifest names the logo, but ships it as a family of scaled variants
+    (``Square44x44Logo.targetsize-256.png`` and friends), so the manifest entry
+    is used as a *stem* and the largest matching file wins.
+    """
+    location = _clean_path(install_location)
+    if not location or not os.path.isdir(location):
+        return ""
+
+    stems: list[str] = []
+    manifest = os.path.join(location, "AppxManifest.xml")
+    if os.path.isfile(manifest):
+        try:
+            with open(manifest, "r", encoding="utf-8", errors="replace") as handle:
+                blob = handle.read(200_000)
+            for attribute in ("Square44x44Logo", "Square150x150Logo", "Logo"):
+                found = re.search(rf'{attribute}="([^"]+)"', blob)
+                if found:
+                    stems.append(found.group(1).replace("\\", os.sep))
+        except OSError:
+            pass
+
+    best, best_size = "", 0
+    for stem in stems:
+        full = os.path.join(location, stem)
+        folder, base = os.path.dirname(full), os.path.splitext(os.path.basename(full))[0].lower()
+        if not os.path.isdir(folder):
+            continue
+        try:
+            entries = list(os.scandir(folder))
+        except OSError:
+            continue
+        for entry in entries:
+            lowered = entry.name.lower()
+            if not lowered.startswith(base) or not lowered.endswith(".png"):
+                continue
+            try:
+                size = entry.stat().st_size
+            except OSError:
+                continue
+            if size > best_size:
+                best, best_size = entry.path, size
+        if best:
+            return best
+
+    # no manifest (or nothing matched): fall back to scanning Assets
+    assets = os.path.join(location, "Assets")
+    folder = assets if os.path.isdir(assets) else location
+    try:
+        entries = list(os.scandir(folder))
+    except OSError:
+        return ""
+    for hint in _APPX_LOGO_HINTS:
+        for entry in entries:
+            lowered = entry.name.lower()
+            if lowered.endswith(".png") and hint in lowered:
+                return entry.path
+    for entry in entries:
+        lowered = entry.name.lower()
+        if lowered.endswith(".png") and any(
+            tag in lowered for tag in ("logo", "icon", "square", "tile")
+        ):
+            try:
+                size = entry.stat().st_size
+            except OSError:
+                continue
+            if size > best_size:
+                best, best_size = entry.path, size
     return best
 
 
