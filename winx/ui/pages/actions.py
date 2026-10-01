@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+import os
+import re
+
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QComboBox,
+    QStyle,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
@@ -20,8 +24,10 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.model import ActionDef, RISK_LABEL, RISKY, SAFE
+from ...core import platform as pf
 from ...core.workers import submit
 from ...modules import actions_data
+from .. import sysicons
 from ..context import AppContext
 from ..widgets import LogConsole, ProgressRow
 from .base import Page
@@ -84,7 +90,8 @@ class ActionsPage(Page):
         self.tree = QTreeWidget()
         self.tree.setColumnCount(4)
         self.tree.setHeaderLabels(["Task", "Risk", "Needs", "About"])
-        self.tree.setRootIsDecorated(False)
+        self.tree.setRootIsDecorated(True)
+        self.tree.setIconSize(QSize(20, 20))
         self.tree.setAlternatingRowColors(True)
         self.tree.setUniformRowHeights(True)
         self.tree.header().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
@@ -92,20 +99,7 @@ class ActionsPage(Page):
         self.tree.currentItemChanged.connect(self._selection_changed)
         self.layout_.addWidget(self.tree, 1)
 
-        for action in self.actions:
-            item = QTreeWidgetItem(
-                [
-                    action.name,
-                    RISK_LABEL.get(action.risk, action.risk),
-                    "Administrator" if action.admin else "",
-                    action.description,
-                ]
-            )
-            item.setData(0, Qt.ItemDataRole.UserRole, action)
-            item.setToolTip(3, action.description)
-            self.tree.addTopLevelItem(item)
-        self.tree.resizeColumnToContents(0)
-        self.tree.resizeColumnToContents(1)
+        self._fill_tree()
 
         self.note = QLabel("")
         self.note.setWordWrap(True)
@@ -135,8 +129,68 @@ class ActionsPage(Page):
             buttons.addWidget(self.btn_clear)
         self.layout_.addLayout(buttons)
 
-        if self.tree.topLevelItemCount():
-            self.tree.setCurrentItem(self.tree.topLevelItem(0))
+        first = next(iter(self._rows()), None)
+        if first is not None:
+            self.tree.setCurrentItem(first[1])
+
+    # -- tree -------------------------------------------------------------
+    def _heading_for(self, action: ActionDef) -> str:
+        """Tasks read better in short, labelled sections than as one long list."""
+        if len(self.groups) > 1:
+            return action.group.capitalize()
+        return {SAFE: "Safe to run", RISKY: "Advanced — read first"}.get(
+            action.risk, "Needs a little care"
+        )
+
+    RISK_ORDER = ["Safe to run", "Needs a little care", "Advanced — read first"]
+
+    def _fill_tree(self) -> None:
+        self.tree.clear()
+        self._headings: dict[str, QTreeWidgetItem] = {}
+        order = (
+            [name.capitalize() for name in self.groups]
+            if len(self.groups) > 1
+            else self.RISK_ORDER
+        )
+        actions = sorted(
+            self.actions,
+            key=lambda a: order.index(self._heading_for(a))
+            if self._heading_for(a) in order
+            else len(order),
+        )
+        for action in actions:
+            heading = self._heading_for(action)
+            parent = self._headings.get(heading)
+            if parent is None:
+                parent = QTreeWidgetItem([heading, "", "", ""])
+                font = parent.font(0)
+                font.setBold(True)
+                parent.setFont(0, font)
+                parent.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                self.tree.addTopLevelItem(parent)
+                self._headings[heading] = parent
+            item = QTreeWidgetItem(
+                [
+                    action.name,
+                    RISK_LABEL.get(action.risk, action.risk),
+                    "Administrator" if action.admin else "",
+                    action.description,
+                ]
+            )
+            item.setIcon(0, _action_icon(action))
+            item.setData(0, Qt.ItemDataRole.UserRole, action)
+            item.setToolTip(3, action.description)
+            parent.addChild(item)
+        self.tree.expandAll()
+        self.tree.resizeColumnToContents(0)
+        self.tree.resizeColumnToContents(1)
+        self.tree.resizeColumnToContents(2)
+
+    def _rows(self):
+        for i in range(self.tree.topLevelItemCount()):
+            parent = self.tree.topLevelItem(i)
+            for j in range(parent.childCount()):
+                yield parent, parent.child(j)
 
     # -- helpers ---------------------------------------------------------
     def _current(self) -> ActionDef | None:
@@ -159,8 +213,8 @@ class ActionsPage(Page):
         needle = self.search.text().strip().lower()
         risk_choice = self.combo_risk.currentData()
         group_choice = self.combo_group.currentData() if self.combo_group else ""
-        for i in range(self.tree.topLevelItemCount()):
-            row = self.tree.topLevelItem(i)
+        shown: dict[QTreeWidgetItem, int] = {}
+        for parent, row in self._rows():
             action = row.data(0, Qt.ItemDataRole.UserRole)
             text = f"{row.text(0)} {row.text(3)}".lower()
             visible = not needle or needle in text
@@ -171,6 +225,11 @@ class ActionsPage(Page):
             if visible and group_choice:
                 visible = action.group == group_choice
             row.setHidden(not visible)
+            shown[parent] = shown.get(parent, 0) + (1 if visible else 0)
+        for parent, count in shown.items():
+            parent.setHidden(count == 0)
+            if count:
+                parent.setExpanded(True)
 
     def focus_search(self, text: str) -> None:
         """Entry point for the global search box."""
@@ -291,3 +350,20 @@ def make_actions_page(group: str, key: str, title: str, subtitle: str, with_cons
         )
 
     return factory
+
+
+_PROGRAM = re.compile(r"\b([A-Za-z0-9_.-]+\.(?:msc|cpl|exe))\b")
+
+
+def _action_icon(action: ActionDef):
+    """Windows' own icon for the console a task opens, or a neutral one."""
+    if pf.IS_WINDOWS:
+        text = " ".join(step.display() for step in action.steps if hasattr(step, "display"))
+        match = _PROGRAM.search(f"{action.description} {text}")
+        if match:
+            candidate = os.path.join(pf.win_dir(), "System32", match.group(1))
+            if os.path.exists(candidate):
+                icon = sysicons.file_icon(candidate, 24)
+                if not icon.isNull():
+                    return icon
+    return sysicons.standard_icon(QStyle.StandardPixmap.SP_CommandLink)
