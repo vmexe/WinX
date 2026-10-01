@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
@@ -20,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.engine import OFF, ON
-from ...core.model import RISK_LABEL, RISKY, SAFE, TweakDef
+from ...core.model import MODERATE, RISK_LABEL, RISKY, SAFE, TweakDef
 from ...core.workers import submit
 from ...modules import tweaks_data
 from ..context import AppContext
@@ -28,6 +29,13 @@ from ..widgets import ProgressRow
 from .base import Page
 
 STATE_TEXT = {ON: "On", OFF: "Off"}
+
+#: risk -> the heading its tweaks are grouped under
+GROUP_TITLE = {
+    SAFE: "Recommended",
+    MODERATE: "Moderate",
+    RISKY: "Advanced",
+}
 
 
 class TweaksPage(Page):
@@ -50,6 +58,7 @@ class TweaksPage(Page):
         self.tweaks: list[TweakDef] = tweaks_data.by_category(category)
         self.states: dict[str, str] = {}
         self.items: dict[str, QTreeWidgetItem] = {}
+        self.groups: dict[str, QTreeWidgetItem] = {}
 
         filters = QHBoxLayout()
         self.search = QLineEdit()
@@ -57,16 +66,33 @@ class TweaksPage(Page):
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._apply_filter)
         filters.addWidget(self.search, 1)
-        self.hide_advanced = QCheckBox("Hide advanced")
-        self.hide_advanced.setChecked(not self.ctx.settings.bool("safety/show_risky"))
-        self.hide_advanced.toggled.connect(self._apply_filter)
-        filters.addWidget(self.hide_advanced)
+        filters.addWidget(QLabel("Risk:"))
+        self.combo_risk = QComboBox()
+        for label, value in [
+            ("Recommended only", "safe"),
+            ("Recommended and moderate", "moderate"),
+            ("Everything, including advanced", "all"),
+        ]:
+            self.combo_risk.addItem(label, value)
+        self.combo_risk.setCurrentIndex(
+            2 if self.ctx.settings.bool("safety/show_risky") else 1
+        )
+        self.combo_risk.currentIndexChanged.connect(self._apply_filter)
+        filters.addWidget(self.combo_risk)
+
+        filters.addWidget(QLabel("State:"))
+        self.combo_state = QComboBox()
+        for label, value in [("Any", "any"), ("On", ON), ("Off", OFF)]:
+            self.combo_state.addItem(label, value)
+        self.combo_state.currentIndexChanged.connect(self._apply_filter)
+        filters.addWidget(self.combo_state)
         self.layout_.addLayout(filters)
+        self.layout_.addLayout(self.cache_row("Re-read current state"))
 
         self.tree = QTreeWidget()
         self.tree.setColumnCount(4)
         self.tree.setHeaderLabels(["Tweak", "Current", "Risk", "Needs"])
-        self.tree.setRootIsDecorated(False)
+        self.tree.setRootIsDecorated(True)
         self.tree.setAlternatingRowColors(True)
         self.tree.setUniformRowHeights(True)
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -82,9 +108,8 @@ class TweaksPage(Page):
         self.layout_.addWidget(self.progress)
 
         buttons = QHBoxLayout()
-        self.btn_reload = QPushButton("Re-read current state")
-        self.btn_reload.clicked.connect(self.refresh)
-        buttons.addWidget(self.btn_reload)
+        # the Refresh button sits next to the "Updated …" line above
+        self.btn_reload = self.refresh_button
         self.btn_safe = QPushButton("Select recommended")
         self.btn_safe.clicked.connect(self._select_safe)
         buttons.addWidget(self.btn_safe)
@@ -110,26 +135,45 @@ class TweaksPage(Page):
 
     # -- tree ------------------------------------------------------------
     def _populate(self) -> None:
+        """Build the list, grouped by risk so the page reads as three short
+        sections rather than one thirty-row wall."""
         self.tree.blockSignals(True)
         self.tree.clear()
         self.items.clear()
-        for tweak in self.tweaks:
-            needs = []
-            if tweak.admin:
-                needs.append("administrator")
-            if tweak.restart == "explorer":
-                needs.append("Explorer restart")
-            elif tweak.restart == "pc":
-                needs.append("reboot")
-            item = QTreeWidgetItem(
-                [tweak.name, "…", RISK_LABEL.get(tweak.risk, tweak.risk), ", ".join(needs)]
-            )
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(0, Qt.CheckState.Unchecked)
-            item.setData(0, Qt.ItemDataRole.UserRole, tweak)
-            item.setToolTip(0, tweak.description)
-            self.tree.addTopLevelItem(item)
-            self.items[tweak.key] = item
+        self.groups.clear()
+
+        for risk in (SAFE, MODERATE, RISKY):
+            tweaks = [t for t in self.tweaks if t.risk == risk]
+            if not tweaks:
+                continue
+            heading = QTreeWidgetItem([GROUP_TITLE.get(risk, risk), "", "", ""])
+            font = heading.font(0)
+            font.setBold(True)
+            heading.setFont(0, font)
+            heading.setFirstColumnSpanned(True)
+            heading.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self.tree.addTopLevelItem(heading)
+            self.groups[risk] = heading
+
+            for tweak in tweaks:
+                needs = []
+                if tweak.admin:
+                    needs.append("administrator")
+                if tweak.restart == "explorer":
+                    needs.append("Explorer restart")
+                elif tweak.restart == "pc":
+                    needs.append("reboot")
+                item = QTreeWidgetItem(
+                    [tweak.name, "…", RISK_LABEL.get(tweak.risk, tweak.risk), ", ".join(needs)]
+                )
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(0, Qt.CheckState.Unchecked)
+                item.setData(0, Qt.ItemDataRole.UserRole, tweak)
+                item.setToolTip(0, tweak.description)
+                heading.addChild(item)
+                self.items[tweak.key] = item
+            heading.setExpanded(risk != RISKY)
+
         self.tree.blockSignals(False)
         self.tree.resizeColumnToContents(1)
         self.tree.resizeColumnToContents(2)
@@ -161,7 +205,9 @@ class TweaksPage(Page):
         for column in (1, 2, 3):
             self.tree.resizeColumnToContents(column)
         self._update_buttons()
+        self._apply_filter()
         self.status(f"{len(states)} settings read")
+        self.mark_loaded()
 
     def _on_failed(self, message: str) -> None:
         self.btn_reload.setEnabled(True)
@@ -214,14 +260,34 @@ class TweaksPage(Page):
 
     def _apply_filter(self, *_args) -> None:
         needle = self.search.text().strip().lower()
-        hide_advanced = self.hide_advanced.isChecked()
-        for item in self.items.values():
+        risk_choice = self.combo_risk.currentData()
+        state_choice = self.combo_state.currentData()
+        for key, item in self.items.items():
             tweak = item.data(0, Qt.ItemDataRole.UserRole)
             haystack = f"{tweak.name} {tweak.description} {' '.join(tweak.tags)}".lower()
-            visible = (not needle or needle in haystack) and not (
-                hide_advanced and tweak.risk == RISKY
-            )
+            visible = not needle or needle in haystack
+            if visible and risk_choice == "safe":
+                visible = tweak.risk == SAFE
+            elif visible and risk_choice == "moderate":
+                visible = tweak.risk != RISKY
+            if visible and state_choice != "any":
+                visible = self.states.get(key) == state_choice
             item.setHidden(not visible)
+
+        # fold away a whole section when nothing in it matches
+        for risk, heading in self.groups.items():
+            shown = sum(
+                1 for i in range(heading.childCount()) if not heading.child(i).isHidden()
+            )
+            heading.setHidden(shown == 0)
+            heading.setText(0, f"{GROUP_TITLE.get(risk, risk)}  ({shown})")
+            if shown and needle:
+                heading.setExpanded(True)
+
+    def focus_search(self, text: str) -> None:
+        """Entry point for the global search box."""
+        self.search.setText(text)
+        self.search.setFocus()
 
     # -- apply -----------------------------------------------------------
     def _preview(self) -> None:

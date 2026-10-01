@@ -41,6 +41,7 @@ class DisksPage(Page):
         self._worker = None
 
         self.tabs = QTabWidget()
+        self.layout_.addLayout(self.cache_row("Re-scan drives"))
         self.layout_.addWidget(self.tabs, 1)
         self.tabs.addTab(self._build_volumes(), "Volumes")
         self.tabs.addTab(self._build_health(), "Drive health")
@@ -65,9 +66,9 @@ class DisksPage(Page):
         layout.addWidget(self.volumes_tree, 1)
 
         buttons = QHBoxLayout()
-        self.btn_refresh = QPushButton("Refresh")
-        self.btn_refresh.clicked.connect(self.refresh)
-        buttons.addWidget(self.btn_refresh)
+        # the "Refresh" button next to the "Updated …" line is the only one:
+        # a second copy down here was just noise
+        self.btn_refresh = self.refresh_button
         self.btn_optimise = QPushButton("Optimise drive")
         self.btn_optimise.clicked.connect(self._optimise)
         buttons.addWidget(self.btn_optimise)
@@ -195,6 +196,7 @@ class DisksPage(Page):
         if current:
             self.root_combo.setEditText(current)
         self.status(f"{len(volumes)} volume(s)")
+        self.mark_loaded()
 
     def _on_failed(self, message: str) -> None:
         self.btn_refresh.setEnabled(True)

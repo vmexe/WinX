@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
+    QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from ...core.workers import submit
 from ...modules import drivers
+from .. import sysicons
 from ..context import AppContext
 from ..widgets import ProgressRow
 from .base import Page
@@ -31,9 +33,12 @@ class DriversPage(Page):
     key = "drivers"
     title = "Drivers"
     subtitle = "Installed drivers, devices reporting problems, and third-party packages in the driver store."
+    cache_ttl = 1800.0
 
     def __init__(self, ctx: AppContext):
         super().__init__(ctx)
+
+        self.layout_.addLayout(self.cache_row())
 
         filters = QHBoxLayout()
         self.search = QLineEdit()
@@ -41,9 +46,24 @@ class DriversPage(Page):
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._apply_filter)
         filters.addWidget(self.search, 1)
-        self.only_problems = QCheckBox("Only problem devices")
-        self.only_problems.toggled.connect(self._apply_filter)
-        filters.addWidget(self.only_problems)
+
+        filters.addWidget(QLabel("Show:"))
+        self.combo_show = QComboBox()
+        for label, value in [
+            ("Everything", "all"),
+            ("Problem devices", "problem"),
+            ("Unsigned drivers", "unsigned"),
+            ("Third-party only", "thirdparty"),
+        ]:
+            self.combo_show.addItem(label, value)
+        self.combo_show.currentIndexChanged.connect(self._apply_filter)
+        filters.addWidget(self.combo_show)
+
+        filters.addWidget(QLabel("Class:"))
+        self.combo_class = QComboBox()
+        self.combo_class.addItem("All classes", "")
+        self.combo_class.currentIndexChanged.connect(self._apply_filter)
+        filters.addWidget(self.combo_class)
         self.layout_.addLayout(filters)
 
         self.tabs = QTabWidget()
@@ -58,6 +78,7 @@ class DriversPage(Page):
         self.tree.setAlternatingRowColors(True)
         self.tree.setUniformRowHeights(True)
         self.tree.setSortingEnabled(True)
+        self.tree.setIconSize(QSize(20, 20))
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         installed_layout.addWidget(self.tree, 1)
         self.tabs.addTab(installed, "Installed drivers")
@@ -87,9 +108,9 @@ class DriversPage(Page):
         self.layout_.addWidget(self.progress)
 
         buttons = QHBoxLayout()
-        self.btn_refresh = QPushButton("Refresh")
-        self.btn_refresh.clicked.connect(self.refresh)
-        buttons.addWidget(self.btn_refresh)
+        # the "Refresh" button next to the "Updated …" line is the only one:
+        # a second copy down here was just noise
+        self.btn_refresh = self.refresh_button
         self.btn_backup = QPushButton("Back up all drivers…")
         self.btn_backup.clicked.connect(self._backup)
         buttons.addWidget(self.btn_backup)
@@ -118,14 +139,26 @@ class DriversPage(Page):
 
         self.tree.setSortingEnabled(False)
         self.tree.clear()
+        classes = sorted({d.device_class for d in installed if d.device_class})
         for driver in installed:
             item = QTreeWidgetItem(
                 [driver.name, driver.device_class, driver.provider, driver.version, driver.date, driver.status]
             )
             item.setData(0, Qt.ItemDataRole.UserRole, driver.is_problem)
+            item.setData(1, Qt.ItemDataRole.UserRole, driver.signed)
+            item.setData(2, Qt.ItemDataRole.UserRole, driver)
+            # the shell has no icon for a driver, so use the platform's own
+            # status icons instead of drawing anything ourselves
+            if driver.is_problem:
+                item.setIcon(0, sysicons.status_icon("warn"))
+            elif not driver.signed:
+                item.setIcon(0, sysicons.status_icon("info"))
+            else:
+                item.setIcon(0, sysicons.status_icon("ok"))
             if not driver.signed:
                 item.setToolTip(0, "Unsigned driver")
             self.tree.addTopLevelItem(item)
+        self._fill_classes(classes)
         self.tree.setSortingEnabled(True)
         self.tree.resizeColumnToContents(1)
 
@@ -139,24 +172,49 @@ class DriversPage(Page):
             self.store_tree.addTopLevelItem(item)
         self.store_tree.setSortingEnabled(True)
         self.store_tree.resizeColumnToContents(0)
+        for pkg_row in range(self.store_tree.topLevelItemCount()):
+            self.store_tree.topLevelItem(pkg_row).setIcon(0, sysicons.generic_app_icon())
 
         self._apply_filter()
+        self.mark_loaded()
 
     def _on_failed(self, message: str) -> None:
         self.btn_refresh.setEnabled(True)
         self.progress.stop("Could not read drivers")
         self.on_error(message)
 
+    def _fill_classes(self, classes: list[str]) -> None:
+        current = self.combo_class.currentData()
+        self.combo_class.blockSignals(True)
+        self.combo_class.clear()
+        self.combo_class.addItem("All classes", "")
+        for name in classes:
+            self.combo_class.addItem(name, name)
+        index = self.combo_class.findData(current)
+        self.combo_class.setCurrentIndex(index if index >= 0 else 0)
+        self.combo_class.blockSignals(False)
+
     def _apply_filter(self, *_args) -> None:
         needle = self.search.text().strip().lower()
-        problems_only = self.only_problems.isChecked()
+        choice = self.combo_show.currentData()
+        wanted_class = self.combo_class.currentData()
         for i in range(self.tree.topLevelItemCount()):
             row = self.tree.topLevelItem(i)
             text = " ".join(row.text(c) for c in range(row.columnCount())).lower()
-            visible = (not needle or needle in text) and (
-                not problems_only or bool(row.data(0, Qt.ItemDataRole.UserRole))
-            )
+            visible = not needle or needle in text
+            if visible and wanted_class:
+                visible = row.text(1) == wanted_class
+            if visible and choice == "problem":
+                visible = bool(row.data(0, Qt.ItemDataRole.UserRole))
+            if visible and choice == "unsigned":
+                visible = not bool(row.data(1, Qt.ItemDataRole.UserRole))
+            if visible and choice == "thirdparty":
+                visible = "microsoft" not in row.text(2).lower()
             row.setHidden(not visible)
+
+    def focus_search(self, text: str) -> None:
+        self.search.setText(text)
+        self.search.setFocus()
 
     # -- actions ---------------------------------------------------------
     def _backup(self) -> None:

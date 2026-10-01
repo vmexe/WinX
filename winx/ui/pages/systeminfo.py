@@ -23,10 +23,13 @@ class SystemInfoPage(Page):
     key = "systeminfo"
     title = "System"
     subtitle = "Hardware, operating system and network details."
+    cache_ttl = 900.0
 
     def __init__(self, ctx: AppContext):
         super().__init__(ctx)
         self.info: dict = {}
+
+        self.layout_.addLayout(self.cache_row("Re-read"))
 
         self.tree = QTreeWidget()
         self.tree.setColumnCount(2)
@@ -39,9 +42,9 @@ class SystemInfoPage(Page):
         self.layout_.addWidget(self.progress)
 
         buttons = QHBoxLayout()
-        self.btn_refresh = QPushButton("Refresh")
-        self.btn_refresh.clicked.connect(self.refresh)
-        buttons.addWidget(self.btn_refresh)
+        # the "Refresh" button next to the "Updated …" line is the only one:
+        # a second copy down here was just noise
+        self.btn_refresh = self.refresh_button
         self.btn_copy = QPushButton("Copy report")
         self.btn_copy.clicked.connect(self._copy)
         buttons.addWidget(self.btn_copy)
@@ -175,6 +178,7 @@ class SystemInfoPage(Page):
         self.tree.expandAll()
         self.tree.resizeColumnToContents(0)
         self.status("System information updated")
+        self.mark_loaded()
 
     def _group(self, title: str, rows: list[tuple[str, str]]) -> None:
         if not rows:

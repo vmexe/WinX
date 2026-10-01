@@ -1,5 +1,5 @@
 # Runtime
-PySide6>=6.6,<7
+PySide6>=6.8,<7   # 6.8 adds QStyleHints.setColorScheme (light/dark switching)
 psutil>=5.9
 
 # Packaging (only needed to build the .exe)

@@ -2,34 +2,58 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
+    QComboBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSlider,
     QTreeWidget,
     QTreeWidgetItem,
 )
 
 from ...core.workers import submit
 from ...modules import apps
+from .. import sysicons
 from ..context import AppContext
 from ..widgets import LogConsole, ProgressRow
 from .base import Page
+
+
+class AppRow(QTreeWidgetItem):
+    """Sorts the size column by megabytes, not by the text '1.2 GB'.
+
+    ``super().__lt__`` is *not* usable here: Qt dispatches ``operator<`` back
+    into this override and the recursion crashes the process, so the default
+    case compares the cell text itself.
+    """
+
+    def __lt__(self, other: QTreeWidgetItem) -> bool:
+        tree = self.treeWidget()
+        column = tree.sortColumn() if tree is not None else 0
+        if column == 3:
+            mine = self.data(2, Qt.ItemDataRole.UserRole) or 0
+            theirs = other.data(2, Qt.ItemDataRole.UserRole) or 0
+            return int(mine) < int(theirs)
+        return self.text(column).casefold() < other.text(column).casefold()
 
 
 class AppsPage(Page):
     key = "apps"
     title = "Uninstaller"
     subtitle = "Everything installed on this PC, including Store apps. Flagged rows are common bloatware."
+    #: enumerating the uninstall registry and every Store package is slow
+    cache_ttl = 1800.0
 
     def __init__(self, ctx: AppContext):
         super().__init__(ctx)
         self.entries: list[apps.App] = []
+
+        self.layout_.addLayout(self.cache_row())
 
         filters = QHBoxLayout()
         self.search = QLineEdit()
@@ -38,10 +62,43 @@ class AppsPage(Page):
         self.search.textChanged.connect(self._apply_filter)
         filters.addWidget(self.search, 1)
 
-        self.only_bloat = QCheckBox("Only bloatware")
-        self.only_bloat.toggled.connect(self._apply_filter)
-        filters.addWidget(self.only_bloat)
+        filters.addWidget(QLabel("Show:"))
+        self.combo_show = QComboBox()
+        for label, value in [
+            ("Everything", "all"),
+            ("Bloatware only", "bloat"),
+            ("Desktop programs", "win32"),
+            ("Store apps", "appx"),
+            ("Removable only", "removable"),
+        ]:
+            self.combo_show.addItem(label, value)
+        self.combo_show.currentIndexChanged.connect(self._apply_filter)
+        filters.addWidget(self.combo_show)
+
+        filters.addWidget(QLabel("Sort by:"))
+        self.combo_sort = QComboBox()
+        for label, column in [
+            ("Name", 0), ("Size", 3), ("Publisher", 2), ("Source", 4)
+        ]:
+            self.combo_sort.addItem(label, column)
+        self.combo_sort.currentIndexChanged.connect(self._apply_sort)
+        filters.addWidget(self.combo_sort)
         self.layout_.addLayout(filters)
+
+        size_row = QHBoxLayout()
+        size_row.addWidget(QLabel("Hide anything smaller than:"))
+        self.slider_size = QSlider(Qt.Orientation.Horizontal)
+        self.slider_size.setRange(0, 2000)
+        self.slider_size.setSingleStep(10)
+        self.slider_size.setPageStep(100)
+        self.slider_size.setTickInterval(250)
+        self.slider_size.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.slider_size.valueChanged.connect(self._size_changed)
+        size_row.addWidget(self.slider_size, 1)
+        self.size_label = QLabel("any size")
+        self.size_label.setMinimumWidth(80)
+        size_row.addWidget(self.size_label)
+        self.layout_.addLayout(size_row)
 
         self.tree = QTreeWidget()
         self.tree.setColumnCount(6)
@@ -50,6 +107,7 @@ class AppsPage(Page):
         self.tree.setAlternatingRowColors(True)
         self.tree.setUniformRowHeights(True)
         self.tree.setSortingEnabled(True)
+        self.tree.setIconSize(QSize(24, 24))
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.tree.itemChanged.connect(lambda *_: self._update_summary())
         self.layout_.addWidget(self.tree, 1)
@@ -62,10 +120,9 @@ class AppsPage(Page):
         self.layout_.addWidget(self.console)
 
         buttons = QHBoxLayout()
-        self.btn_refresh = QPushButton("Refresh")
-        self.btn_refresh.clicked.connect(self.refresh)
-        buttons.addWidget(self.btn_refresh)
-
+        # the "Refresh" button next to the "Updated …" line is the only one:
+        # a second copy down here was just noise
+        self.btn_refresh = self.refresh_button
         self.btn_select_bloat = QPushButton("Select bloatware")
         self.btn_select_bloat.clicked.connect(self._select_bloat)
         buttons.addWidget(self.btn_select_bloat)
@@ -106,7 +163,7 @@ class AppsPage(Page):
         self.tree.clear()
         for app in entries:
             is_bloat, reason = apps.is_bloat_app(app)
-            item = QTreeWidgetItem(
+            item = AppRow(
                 [app.name, app.version, app.publisher, app.size_text, app.source,
                  reason if is_bloat else ""]
             )
@@ -114,6 +171,9 @@ class AppsPage(Page):
             item.setCheckState(0, Qt.CheckState.Unchecked)
             item.setData(0, Qt.ItemDataRole.UserRole, app)
             item.setData(1, Qt.ItemDataRole.UserRole, is_bloat)
+            item.setData(2, Qt.ItemDataRole.UserRole, app.size_mb)
+            icon = sysicons.file_icon(getattr(app, "icon_path", ""))
+            item.setIcon(0, icon if not icon.isNull() else sysicons.generic_app_icon())
             if not app.removable:
                 item.setDisabled(True)
                 item.setToolTip(0, "This entry cannot be uninstalled from here")
@@ -123,8 +183,10 @@ class AppsPage(Page):
         self.tree.blockSignals(False)
         self.tree.resizeColumnToContents(1)
         self.tree.resizeColumnToContents(3)
+        self._apply_sort()
         self._apply_filter()
         self._update_summary()
+        self.mark_loaded()
 
     def _on_failed(self, message: str) -> None:
         self._set_busy(False)
@@ -159,15 +221,50 @@ class AppsPage(Page):
     def _update_summary(self) -> None:
         self.summary.setText(f"{len(self._selected_apps())} selected")
 
-    def _apply_filter(self, *_args) -> None:
+    def _size_changed(self, value: int) -> None:
+        self.size_label.setText("any size" if not value else f"{value} MB")
+        self._apply_filter()
+
+    def _apply_sort(self, *_args) -> None:
+        column = self.combo_sort.currentData()
+        order = (
+            Qt.SortOrder.DescendingOrder if column == 3 else Qt.SortOrder.AscendingOrder
+        )
+        self.tree.sortItems(int(column), order)
+
+    def _matches(self, row) -> bool:
         needle = self.search.text().strip().lower()
-        bloat_only = self.only_bloat.isChecked()
+        if needle and needle not in f"{row.text(0)} {row.text(2)}".lower():
+            return False
+        app = row.data(0, Qt.ItemDataRole.UserRole)
+        choice = self.combo_show.currentData()
+        if choice == "bloat" and not row.data(1, Qt.ItemDataRole.UserRole):
+            return False
+        if choice == "appx" and getattr(app, "source", "") != "AppX":
+            return False
+        if choice == "win32" and getattr(app, "source", "") == "AppX":
+            return False
+        if choice == "removable" and not getattr(app, "removable", True):
+            return False
+        minimum = self.slider_size.value()
+        if minimum and int(getattr(app, "size_mb", 0) or 0) < minimum:
+            return False
+        return True
+
+    def _apply_filter(self, *_args) -> None:
+        shown = 0
         for row in self._rows():
-            text = f"{row.text(0)} {row.text(2)}".lower()
-            visible = (not needle or needle in text) and (
-                not bloat_only or bool(row.data(1, Qt.ItemDataRole.UserRole))
-            )
+            visible = self._matches(row)
             row.setHidden(not visible)
+            shown += int(visible)
+        total = self.tree.topLevelItemCount()
+        if total and shown != total:
+            self.status(f"Showing {shown} of {total} programs")
+
+    def focus_search(self, text: str) -> None:
+        """Used by the global search box."""
+        self.search.setText(text)
+        self.search.setFocus()
 
     # -- uninstall -------------------------------------------------------
     def _uninstall(self) -> None:
@@ -204,7 +301,7 @@ class AppsPage(Page):
         self.progress.stop(message)
         self.log(message, "ok" if not failed else "warn")
         self.status(message)
-        self.refresh()
+        self.force_refresh()
 
     def _set_busy(self, busy: bool) -> None:
         for button in (self.btn_refresh, self.btn_uninstall, self.btn_select_bloat, self.btn_none):

@@ -112,7 +112,12 @@ class WinX:
         if pf.simulating():
             seed_simulation(seeded_registry())
 
+        from .ui import appearance
         from .ui.main_window import MainWindow
+
+        # light/dark is Qt's own colour scheme, so the platform style keeps
+        # drawing native widgets — WinX never paints its own theme.
+        appearance.apply_saved(self.settings)
 
         self.window = MainWindow(self.ctx)
         last = self.settings.str("ui/last_page")

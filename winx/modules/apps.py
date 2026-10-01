@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from typing import Callable
@@ -18,7 +19,8 @@ UNINSTALL_SCRIPT = (
     "Get-ItemProperty $paths -ErrorAction SilentlyContinue | "
     "Where-Object { $_.DisplayName -and ($_.SystemComponent -ne 1) -and ($_.ParentKeyName -eq $null) } | "
     "Select-Object DisplayName, DisplayVersion, Publisher, InstallDate, EstimatedSize, "
-    "UninstallString, QuietUninstallString, PSPath | Sort-Object DisplayName"
+    "UninstallString, QuietUninstallString, DisplayIcon, InstallLocation, PSPath | "
+    "Sort-Object DisplayName"
 )
 
 APPX_SCRIPT = (
@@ -40,6 +42,8 @@ class App:
     uninstall_string: str = ""
     quiet_string: str = ""
     removable: bool = True
+    #: file the UI can pull a real icon out of (exe/ico/png), when known
+    icon_path: str = ""
 
     @property
     def size_text(self) -> str:
@@ -168,6 +172,7 @@ def installed_apps(progress: Callable[[int, int, str], None] | None = None) -> l
                 uninstall_id=key_id,
                 uninstall_string=text(row.get("UninstallString")),
                 quiet_string=text(row.get("QuietUninstallString")),
+                icon_path=_icon_source(row),
             )
         )
 
@@ -187,11 +192,61 @@ def installed_apps(progress: Callable[[int, int, str], None] | None = None) -> l
                 uninstall_id=text(row.get("PackageFullName")),
                 uninstall_string=f"Remove-AppxPackage '{text(row.get('PackageFullName'))}'",
                 removable=not bool(row.get("NonRemovable")),
+                icon_path=_appx_logo(text(row.get("InstallLocation"))),
             )
         )
 
     apps.sort(key=lambda a: a.name.lower())
     return apps
+
+
+def _icon_source(row: dict) -> str:
+    """Best guess at a file the shell can render an icon for.
+
+    ``DisplayIcon`` is usually ``C:\\path\\app.exe,0`` but is sometimes missing,
+    in which case the installation folder's main executable is good enough.
+    """
+    raw = text(row.get("DisplayIcon")).strip().strip('"')
+    if raw:
+        path = raw.split(",")[0].strip().strip('"')
+        if path and os.path.exists(path):
+            return path
+    location = text(row.get("InstallLocation")).strip().strip('"')
+    if location and os.path.isdir(location):
+        try:
+            exes = sorted(
+                (e for e in os.scandir(location) if e.is_file() and e.name.lower().endswith(".exe")),
+                key=lambda e: e.stat().st_size,
+                reverse=True,
+            )
+        except OSError:
+            return ""
+        if exes:
+            return exes[0].path
+    return ""
+
+
+def _appx_logo(install_location: str) -> str:
+    """The largest pre-rendered logo shipped inside a Store package."""
+    location = (install_location or "").strip().strip('"')
+    if not location or not os.path.isdir(location):
+        return ""
+    assets = os.path.join(location, "Assets")
+    folder = assets if os.path.isdir(assets) else location
+    best, best_size = "", 0
+    try:
+        for entry in os.scandir(folder):
+            name = entry.name.lower()
+            if not name.endswith(".png") or not entry.is_file():
+                continue
+            if not any(tag in name for tag in ("logo", "icon", "square", "tile")):
+                continue
+            size = entry.stat().st_size
+            if size > best_size:
+                best, best_size = entry.path, size
+    except OSError:
+        return ""
+    return best
 
 
 def _fmt_date(raw) -> str:

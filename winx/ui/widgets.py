@@ -8,35 +8,23 @@ platform style says it should look like.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QApplication,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
-    QStyle,
     QWidget,
 )
 
-#: status name -> standard pixmap, so rows use the platform's own icons
-STATUS_PIXMAP = {
-    "ok": QStyle.StandardPixmap.SP_DialogApplyButton,
-    "info": QStyle.StandardPixmap.SP_MessageBoxInformation,
-    "warn": QStyle.StandardPixmap.SP_MessageBoxWarning,
-    "fail": QStyle.StandardPixmap.SP_MessageBoxCritical,
-}
+from .sysicons import STATUS_PIXMAP, standard_icon, status_icon
 
-
-def standard_icon(pixmap: QStyle.StandardPixmap):
-    """An icon from the current platform style."""
-    app = QApplication.instance()
-    style = app.style() if app else None
-    return style.standardIcon(pixmap) if style else None
-
-
-def status_icon(status: str):
-    return standard_icon(STATUS_PIXMAP.get(status, QStyle.StandardPixmap.SP_MessageBoxInformation))
+#: re-exported so existing imports keep working; the icons themselves come
+#: from the platform style (see :mod:`winx.ui.sysicons`)
+__all__ = ["STATUS_PIXMAP", "standard_icon", "status_icon", "ProgressRow", "LogConsole"]
 
 
 class ProgressRow(QWidget):
@@ -102,8 +90,57 @@ class LogConsole(QPlainTextEdit):
             | Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
 
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
+        self._extra_actions = [self._action("Save output…", self.save_to_file),
+                               self._action("Clear output", self.clear)]
+
+    def _action(self, text: str, slot) -> QAction:
+        action = QAction(text, self)
+        action.triggered.connect(slot)
+        return action
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        """The standard menu, plus Save and Clear."""
+        menu = self.createStandardContextMenu()
+        menu.addSeparator()
+        for action in self._extra_actions:
+            menu.addAction(action)
+        menu.exec(event.globalPos())
+
+    def save_to_file(self) -> None:
+        path, _filter = QFileDialog.getSaveFileName(
+            self, "Save output", "winx-output.txt", "Text files (*.txt);;All files (*)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(self.toPlainText())
+        except OSError as exc:
+            QMessageBox.warning(self, "Save output", f"Could not write the file:\n\n{exc}")
+
     def append(self, text: str, level: str = "info") -> None:
+        """Add lines without stealing a selection or the scroll position.
+
+        Output arrives while the user may be reading or copying it; scrolling
+        is only forced when the view was already parked at the bottom.
+        """
         prefix = {"error": "! ", "warn": "! ", "cmd": "> ", "ok": "+ "}.get(level, "")
+        scrollbar = self.verticalScrollBar()
+        at_bottom = scrollbar.value() >= scrollbar.maximum() - 2
+        had_selection = self.textCursor().hasSelection()
+
+        cursor = self.textCursor()
+        saved = (cursor.selectionStart(), cursor.selectionEnd())
         for line in str(text).splitlines() or [""]:
             self.appendPlainText(prefix + line)
-        self.ensureCursorVisible()
+
+        if had_selection:
+            restored = self.textCursor()
+            restored.setPosition(saved[0])
+            restored.setPosition(saved[1], restored.MoveMode.KeepAnchor)
+            self.setTextCursor(restored)
+        if at_bottom:
+            scrollbar.setValue(scrollbar.maximum())
+        else:                                   # leave the user where they were
+            scrollbar.setValue(scrollbar.value())

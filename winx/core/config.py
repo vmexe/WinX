@@ -12,7 +12,7 @@ from . import platform as pf
 
 APP_NAME = "WinX"
 ORG_NAME = "vmexe"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 
 def _base_dir() -> Path:
@@ -68,6 +68,7 @@ DEFAULTS = {
     "cleaner/selected": "",
     "ui/last_page": "dashboard",
     "ui/window_geometry": "",
+    "ui/color_scheme": "system",           # system | light | dark
 }
 
 

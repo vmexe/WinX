@@ -5,6 +5,8 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
+    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -20,6 +22,7 @@ from ... import __version__
 from ...core import platform as pf
 from ...core.config import backups_dir, data_dir, log_file
 from ...core.workers import submit
+from .. import appearance
 from ..context import AppContext
 from .base import Page
 
@@ -31,6 +34,8 @@ class SettingsPage(Page):
 
     def __init__(self, ctx: AppContext):
         super().__init__(ctx)
+
+        self.layout_.addWidget(self._appearance_group())
 
         safety = QGroupBox("Safety")
         safety_layout = QVBoxLayout(safety)
@@ -94,12 +99,81 @@ class SettingsPage(Page):
         folders_layout.addWidget(self._path_row("Log file", str(log_file())))
         self.layout_.addWidget(folders)
 
+        self.layout_.addWidget(self._updates_group())
+
         about = QLabel(
             f"WinX {__version__} · {pf.os_display_name()} · "
             + ("administrator" if pf.is_admin() else "standard user")
         )
         about.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.layout_.addWidget(about)
+
+    # -- appearance ------------------------------------------------------
+    def _appearance_group(self) -> QGroupBox:
+        box = QGroupBox("Appearance")
+        form = QFormLayout(box)
+
+        self.combo_scheme = QComboBox()
+        for value, label in appearance.CHOICES:
+            self.combo_scheme.addItem(label, value)
+        current = appearance.current(self.ctx.settings)
+        self.combo_scheme.setCurrentIndex(max(0, self.combo_scheme.findData(current)))
+        self.combo_scheme.currentIndexChanged.connect(self._scheme_changed)
+        form.addRow("Colour mode:", self.combo_scheme)
+
+        hint = QLabel(
+            "WinX uses the Windows widget style; this only tells Qt whether to draw "
+            "the light or the dark variant of it."
+            if appearance.supported()
+            else "This build of Qt always follows the Windows light/dark setting."
+        )
+        hint.setWordWrap(True)
+        hint.setEnabled(False)
+        form.addRow("", hint)
+        self.combo_scheme.setEnabled(appearance.supported())
+        return box
+
+    def _scheme_changed(self, _index: int) -> None:
+        value = self.combo_scheme.currentData()
+        window = self.window()
+        if hasattr(window, "set_color_scheme"):
+            window.set_color_scheme(value)
+        else:                                   # standalone page (tests)
+            self.ctx.settings.set(appearance.SETTING_KEY, value)
+            appearance.apply(value)
+
+    def sync_appearance(self, value: str) -> None:
+        """Keep the combo in step when the menu changes the mode."""
+        index = self.combo_scheme.findData(value)
+        if index >= 0 and index != self.combo_scheme.currentIndex():
+            self.combo_scheme.blockSignals(True)
+            self.combo_scheme.setCurrentIndex(index)
+            self.combo_scheme.blockSignals(False)
+
+    # -- updates ---------------------------------------------------------
+    def _updates_group(self) -> QGroupBox:
+        box = QGroupBox("Updates")
+        layout = QVBoxLayout(box)
+        self.chk_updates = self._option(
+            layout,
+            "general/check_updates",
+            "Check for a new version of WinX at startup",
+            "WinX only contacts GitHub to read the latest release number.",
+        )
+        row = QHBoxLayout()
+        self.btn_check = QPushButton("Check now")
+        self.btn_check.clicked.connect(self._check_updates)
+        row.addWidget(self.btn_check)
+        row.addStretch(1)
+        layout.addLayout(row)
+        return box
+
+    def _check_updates(self) -> None:
+        window = self.window()
+        if hasattr(window, "check_for_updates"):
+            window.check_for_updates(quiet=False)
+        else:
+            self.status("Update checking needs the main window")
 
     # -- helpers ---------------------------------------------------------
     def _option(self, layout, key: str, label: str, hint: str) -> QCheckBox:

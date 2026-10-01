@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
@@ -18,7 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ...core.model import ActionDef, RISK_LABEL, RISKY
+from ...core.model import ActionDef, RISK_LABEL, RISKY, SAFE
 from ...core.workers import submit
 from ...modules import actions_data
 from ..context import AppContext
@@ -50,11 +51,35 @@ class ActionsPage(Page):
         ]
         self._worker = None
 
+        filters = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search tasks…")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._apply_filter)
-        self.layout_.addWidget(self.search)
+        filters.addWidget(self.search, 1)
+
+        filters.addWidget(QLabel("Risk:"))
+        self.combo_risk = QComboBox()
+        for label, value in [
+            ("Any", "any"),
+            ("Safe only", "safe"),
+            ("Hide advanced", "nonrisky"),
+        ]:
+            self.combo_risk.addItem(label, value)
+        self.combo_risk.currentIndexChanged.connect(self._apply_filter)
+        filters.addWidget(self.combo_risk)
+
+        if len(self.groups) > 1:
+            filters.addWidget(QLabel("Group:"))
+            self.combo_group = QComboBox()
+            self.combo_group.addItem("All groups", "")
+            for name in self.groups:
+                self.combo_group.addItem(name.capitalize(), name)
+            self.combo_group.currentIndexChanged.connect(self._apply_filter)
+            filters.addWidget(self.combo_group)
+        else:
+            self.combo_group = None
+        self.layout_.addLayout(filters)
 
         self.tree = QTreeWidget()
         self.tree.setColumnCount(4)
@@ -132,10 +157,25 @@ class ActionsPage(Page):
 
     def _apply_filter(self, *_args) -> None:
         needle = self.search.text().strip().lower()
+        risk_choice = self.combo_risk.currentData()
+        group_choice = self.combo_group.currentData() if self.combo_group else ""
         for i in range(self.tree.topLevelItemCount()):
             row = self.tree.topLevelItem(i)
+            action = row.data(0, Qt.ItemDataRole.UserRole)
             text = f"{row.text(0)} {row.text(3)}".lower()
-            row.setHidden(bool(needle) and needle not in text)
+            visible = not needle or needle in text
+            if visible and risk_choice == "safe":
+                visible = action.risk == SAFE
+            elif visible and risk_choice == "nonrisky":
+                visible = action.risk != RISKY
+            if visible and group_choice:
+                visible = action.group == group_choice
+            row.setHidden(not visible)
+
+    def focus_search(self, text: str) -> None:
+        """Entry point for the global search box."""
+        self.search.setText(text)
+        self.search.setFocus()
 
     # -- run -------------------------------------------------------------
     def _run(self) -> None:

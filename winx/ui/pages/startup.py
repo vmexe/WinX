@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
+    QComboBox,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QTabWidget,
@@ -19,11 +21,28 @@ from PySide6.QtWidgets import (
 
 from ...core.workers import submit
 from ...modules import startup
+from .. import sysicons
 from ..context import AppContext
 from ..widgets import ProgressRow
 from .base import Page
 
 SERVICE_STARTS = ["auto", "delayed-auto", "demand", "disabled"]
+
+
+def _executable_of(command: str) -> str:
+    """Pull the program out of a command line so the shell can icon it."""
+    import os
+    import shlex
+
+    raw = (command or "").strip()
+    if not raw:
+        return ""
+    try:
+        parts = shlex.split(raw, posix=False)
+    except ValueError:
+        parts = [raw]
+    candidate = (parts[0] if parts else raw).strip('"')
+    return candidate if candidate and os.path.exists(candidate) else ""
 
 
 class StartupPage(Page):
@@ -34,6 +53,27 @@ class StartupPage(Page):
     def __init__(self, ctx: AppContext):
         super().__init__(ctx)
         self.items: list[startup.StartupItem] = []
+
+        self.layout_.addLayout(self.cache_row("Re-scan"))
+
+        filters = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search startup entries…")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._apply_filter)
+        filters.addWidget(self.search, 1)
+        filters.addWidget(QLabel("Show:"))
+        self.combo_show = QComboBox()
+        for label, value in [
+            ("Everything", "all"),
+            ("Enabled only", "enabled"),
+            ("Disabled only", "disabled"),
+            ("High impact", "high"),
+        ]:
+            self.combo_show.addItem(label, value)
+        self.combo_show.currentIndexChanged.connect(self._apply_filter)
+        filters.addWidget(self.combo_show)
+        self.layout_.addLayout(filters)
 
         self.tabs = QTabWidget()
         self.layout_.addWidget(self.tabs, 1)
@@ -48,6 +88,7 @@ class StartupPage(Page):
         self.tree.setAlternatingRowColors(True)
         self.tree.setUniformRowHeights(True)
         self.tree.setSortingEnabled(True)
+        self.tree.setIconSize(QSize(20, 20))
         self.tree.header().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self.tree.currentItemChanged.connect(self._show_command)
         entries_layout.addWidget(self.tree, 1)
@@ -96,9 +137,9 @@ class StartupPage(Page):
         self.layout_.addWidget(self.progress)
 
         footer = QHBoxLayout()
-        self.btn_refresh = QPushButton("Refresh")
-        self.btn_refresh.clicked.connect(self.refresh)
-        footer.addWidget(self.btn_refresh)
+        # the "Refresh" button next to the "Updated …" line is the only one:
+        # a second copy down here was just noise
+        self.btn_refresh = self.refresh_button
         footer.addStretch(1)
         self.summary = QLabel("")
         footer.addWidget(self.summary)
@@ -136,6 +177,8 @@ class StartupPage(Page):
                 ]
             )
             row.setData(0, Qt.ItemDataRole.UserRole, item)
+            icon = sysicons.file_icon(_executable_of(item.command))
+            row.setIcon(0, icon if not icon.isNull() else sysicons.generic_app_icon())
             self.tree.addTopLevelItem(row)
         self.tree.setSortingEnabled(True)
         self.tree.resizeColumnToContents(0)
@@ -157,6 +200,28 @@ class StartupPage(Page):
         )
         self.progress.stop("")
         self.status("Startup list updated")
+        self._apply_filter()
+        self.mark_loaded()
+
+    def _apply_filter(self, *_args) -> None:
+        needle = self.search.text().strip().lower()
+        choice = self.combo_show.currentData()
+        for i in range(self.tree.topLevelItemCount()):
+            row = self.tree.topLevelItem(i)
+            item = row.data(0, Qt.ItemDataRole.UserRole)
+            text = " ".join(row.text(c) for c in range(row.columnCount())).lower()
+            visible = not needle or needle in text
+            if visible and choice == "enabled":
+                visible = bool(getattr(item, "enabled", True))
+            if visible and choice == "disabled":
+                visible = not getattr(item, "enabled", True)
+            if visible and choice == "high":
+                visible = str(getattr(item, "impact", "")).lower() == "high"
+            row.setHidden(not visible)
+
+    def focus_search(self, text: str) -> None:
+        self.search.setText(text)
+        self.search.setFocus()
 
     def _on_failed(self, message: str) -> None:
         self.btn_refresh.setEnabled(True)

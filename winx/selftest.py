@@ -275,6 +275,37 @@ def main() -> int:
         hasattr(pf.powershell_exe, "cache_info"),
     )
 
+    section("Updates")
+    from .core import updates
+
+    check("version parsing", updates.parse_version("v1.2.3") == (1, 2, 3))
+    check("newer release detected", updates.is_newer("v1.2.0", "1.1.0"))
+    check("same release is not newer", not updates.is_newer("1.1.0", "1.1.0"))
+    check("older release is not newer", not updates.is_newer("1.0.9", "1.1.0"))
+    check("short versions compare", updates.is_newer("2", "1.9.9"))
+    check(
+        "self-update refuses to run from source",
+        updates.apply_update(__file__)[0] is False,
+    )
+    check(
+        "a download needs an asset url",
+        updates.download(updates.UpdateInfo(version="9.9.9"))[0] is False,
+    )
+
+    section("Page caching")
+    from .ui.pages.base import age_text
+
+    check("age text: fresh", age_text(2) == "just now")
+    check("age text: minutes", age_text(300) == "5 minutes ago")
+    check("age text: hours", age_text(7200) == "2 hours ago")
+
+    section("App icons")
+    from .modules.apps import _appx_logo, _icon_source
+
+    check("icon source ignores missing files", _icon_source({"DisplayIcon": r"Z:\nope.exe,0"}) == "")
+    check("icon source tolerates empty rows", _icon_source({}) == "")
+    check("appx logo tolerates a missing folder", _appx_logo(r"Z:\nope") == "")
+
     section("Simulation safety")
     check("simulation is active off-Windows", pf.simulating() or pf.IS_WINDOWS)
     if not pf.IS_WINDOWS:

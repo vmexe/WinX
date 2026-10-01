@@ -35,6 +35,9 @@ class DashboardPage(Page):
     #: cache and Windows.old can take minutes of disk I/O
     JUNK_SCAN_BUDGET = 20.0
 
+    #: the health check walks the disk, so keep its answer for a few minutes
+    cache_ttl = 300.0
+
     def __init__(self, ctx: AppContext):
         super().__init__(ctx)
         self.checks: list[dict] = []
@@ -191,6 +194,7 @@ class DashboardPage(Page):
         self._render_checks()
         self._tick()
         self.status("Health checks complete")
+        self.mark_loaded()
 
     def _on_failed(self, message: str) -> None:
         self.btn_refresh.setEnabled(True)

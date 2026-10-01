@@ -36,6 +36,8 @@ class CleanerPage(Page):
         self.results: dict[str, cleaner.ScanResult] = {}
         self._worker = None
 
+        self.layout_.addLayout(self.cache_row("Scan again"))
+
         self.tree = QTreeWidget()
         self.tree.setColumnCount(4)
         self.tree.setHeaderLabels(["Location", "Size", "Files", "Risk"])
@@ -59,8 +61,8 @@ class CleanerPage(Page):
         self.layout_.addWidget(self.console)
 
         buttons = QHBoxLayout()
-        self.btn_scan = QPushButton("Scan")
-        self.btn_scan.clicked.connect(self.refresh)
+        self.btn_scan = QPushButton("Scan now")
+        self.btn_scan.clicked.connect(self.force_refresh)
         buttons.addWidget(self.btn_scan)
 
         self.btn_safe = QPushButton("Select safe items")
@@ -189,6 +191,7 @@ class CleanerPage(Page):
         self.progress.stop(f"Scan complete — {human_size(total)} removable")
         self._update_summary()
         self.status(f"Scan complete: {human_size(total)} can be removed")
+        self.mark_loaded()
 
     # -- clean -----------------------------------------------------------
     def _clean(self) -> None:

@@ -73,6 +73,8 @@ def main() -> int:
         record(f"open page: {key}", (time.perf_counter() - started) * 1000, PAGE_BUDGET_MS)
 
     worker_errors = exercise_pages(window)
+    check_cache_reuse(window)
+    check_global_search(window)
 
     if failures:
         print("\nUI thread blocked for too long:")
@@ -86,6 +88,58 @@ def main() -> int:
         return 1
     print("\nok    every UI-thread operation stayed within budget, and every page loaded")
     return 0
+
+
+def check_cache_reuse(window) -> None:
+    """Re-opening a page must reuse its result instead of scanning again."""
+    from PySide6.QtWidgets import QApplication
+
+    from winx.core import workers
+    from winx.ui.pages.base import Page
+
+    print()
+    submissions: list[str] = []
+    original = workers.submit
+
+    def spy(fn, *args, **kwargs):
+        submissions.append(getattr(fn, "__name__", str(fn)))
+        return original(fn, *args, **kwargs)
+
+    workers.submit = spy
+    try:
+        for key in ("apps", "drivers", "systeminfo", "disks", "startup"):
+            page = window.pages.get(key) or window.page(key)
+            if not isinstance(page, Page):
+                continue
+            submissions.clear()
+            page.on_show()                     # already loaded by exercise_pages
+            QApplication.processEvents()
+            reused = not submissions
+            status = "ok  " if reused else "FAIL"
+            if not reused:
+                failures.append(f"{key} re-scanned on re-open ({submissions[0]})")
+            detail = "served from cache" if reused else f"re-ran {submissions[0]}"
+            print(f"  {status}  re-open page: {key:<36} {detail}")
+    finally:
+        workers.submit = original
+
+
+def check_global_search(window) -> None:
+    """The toolbar search must find a tweak and land on the right page."""
+    from PySide6.QtWidgets import QApplication
+
+    print()
+    cases = [
+        ("Disks", "disks"),
+        ("Disable window animations — Performance", "performance"),
+    ]
+    for text, expected in cases:
+        window._search_chosen(text)
+        QApplication.processEvents()
+        ok = window._current == expected
+        if not ok:
+            failures.append(f"search '{text}' opened {window._current}, expected {expected}")
+        print(f"  {'ok  ' if ok else 'FAIL'}  search: {text[:38]:<38} -> {window._current}")
 
 
 def exercise_pages(window) -> list[str]:

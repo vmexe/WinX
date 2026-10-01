@@ -25,7 +25,11 @@ python main.py --version
 | **Reversibility** | Before a value is written, WinX records what was there — including *“nothing”*. Backups are listed in **Settings → History** and can be undone, individually or wholesale. Backups are **optional**; switch them off per run (the checkbox on the Apply bar) or globally. |
 | **Honesty about risk** | Each change is rated *Safe*, *Moderate* or *Advanced*, tagged *Admin* where elevation is required, and flagged when it needs a reboot or restarts Explorer. Advanced changes get their own confirmation. |
 | **Responsiveness** | Scans, repairs and enumerations run on a `QThreadPool`; the UI never blocks and long tasks can be cancelled. `tools/uicheck.py` measures UI-thread block time in CI. |
-| **Native look** | Standard Qt widgets only — no stylesheet, no custom palette, no bundled fonts and no hand-drawn icons. WinX uses the platform style, so it follows the system theme (including light/dark) and the user's font and scaling settings. |
+| **Native look** | Standard Qt widgets only — no stylesheet, no custom palette, no bundled fonts and no hand-drawn icons. WinX uses the platform style, so it follows the system theme and the user's font and scaling settings. Icons come from the shell (real program icons in the Uninstaller) and from the style's standard pixmaps. |
+| **Light or dark, your choice** | *Settings → Appearance* (or *View → Appearance*) switches between **Follow Windows / Light / Dark** using Qt's own colour scheme, so the native style simply redraws itself — there is still no WinX theme. |
+| **Finding things** | One search box in the toolbar (**Ctrl+F**) covers pages, all 85 tweaks and all 59 tasks; picking a result opens the page with its own filter already applied. The navigation is a collapsible tree — no disabled rows. |
+| **Not re-scanning** | Each page keeps its last result and shows *“Updated 3 minutes ago”* with a Refresh button; re-opening the Uninstaller, Disks or Drivers is instant. `tools/uicheck.py` fails the build if a page re-scans on re-open. |
+| **Staying current** | *Help → Check for updates* (and an optional startup check) reads the latest GitHub release; the packaged `WinX.exe` can download and install it, then relaunch. |
 | **Testability** | The engine has no widget dependencies, so `python main.py --selftest` applies real changes, verifies them, undoes them and checks every module — on Windows *and* on Linux/macOS in simulation mode. |
 
 ---
@@ -78,7 +82,9 @@ Registry Run/RunOnce keys (HKCU+HKLM+WOW6432Node), Startup folders, and logon/bo
 deletes), so it can always be restored; a second tab manages auto‑starting services.
 
 ### Uninstaller
-Win32 + MSI + AppX inventory with size and publisher, bloatware detection against a
+Win32 + MSI + AppX inventory with the program's **real icon**, size and publisher,
+filters (everything / bloatware / desktop programs / Store apps / removable), a
+minimum-size slider and sorting by name, size, publisher or source, bloatware detection against a
 curated pattern list (Candy Crush, TikTok, Spotify, Disney+, Clipchamp, Xbox extras…),
 batch uninstall, and generated silent uninstall commands (`msiexec /X{ guid } /qn`,
 `Remove-AppxPackage`, provisioned‑package cleanup, winget as a fallback).
@@ -131,13 +137,17 @@ winx/
     platform.py             Windows detection, elevation, simulation flag
     winquery.py             structured PowerShell (CIM) queries
     workers.py              QThreadPool workers with progress/log signals
+    updates.py              GitHub release check, download and self-update
     simdata.py              plausible machine data for simulation mode
   modules/
     tweaks_data.py          the 85 tweak definitions
     actions_data.py         the 59 one-shot tasks
     cleaner.py  startup.py  apps.py  disks.py  drivers.py  systeminfo.py
   ui/
-    main_window.py          navigation list, page stack, menus, status bar, log dock
+    main_window.py          navigation tree, global search, page stack, menus,
+                            status bar, log dock, update checker
+    appearance.py           light / dark / follow-Windows via Qt's colour scheme
+    sysicons.py             shell icons (SHGetFileInfoW) + standard style pixmaps
     widgets.py              progress row + log console (plain Qt, no styling)
     pages/                  dashboard, cleaner, tweaks, repair, network, startup,
                             privacy, security, interface, gaming, apps, disks,
