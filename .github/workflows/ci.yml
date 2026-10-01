@@ -40,12 +40,17 @@ jobs:
       - name: Run the self-test
         id: selftest
         continue-on-error: true
+        shell: bash
         run: |
-          set -o pipefail
-          python main.py --selftest 2>&1 | tee selftest.txt
+          set +e
+          python main.py --selftest > selftest.txt 2>&1
+          code=$?
+          cat selftest.txt
+          exit $code
 
       - name: Post self-test output to the PR
         if: always() && github.event_name == 'pull_request'
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
