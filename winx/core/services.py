@@ -32,6 +32,26 @@ _START_MAP = {
 }
 
 
+def parse_start_type(raw: str) -> str:
+    """Turn the ``START_TYPE`` line of ``sc qc`` into a canonical token.
+
+    ``sc qc`` prints a numeric code before the name, and appends
+    ``(DELAYED)`` for delayed auto-start::
+
+        START_TYPE         : 2   AUTO_START
+        START_TYPE         : 2   AUTO_START (DELAYED)
+        START_TYPE         : 4   DISABLED
+    """
+    if not raw:
+        return ""
+    parts = [p for p in re.split(r"[\s()]+", raw.strip()) if p]
+    if not parts:
+        return ""
+    delayed = any(p.upper() == "DELAYED" for p in parts)
+    token = next((p for p in parts if not p.isdigit()), "")
+    return normalise_start("delayed-auto" if delayed else token)
+
+
 def normalise_start(value: str) -> str:
     """Normalise any start-type spelling to a canonical token.
 
@@ -65,8 +85,7 @@ def query(name: str) -> dict:
     display = name
     m = re.search(r"START_TYPE\s*:\s*(.+)", out, re.I)
     if m:
-        # e.g. "2   AUTO_START" or "2   AUTO_START (DELAYED)"
-        start = normalise_start(m.group(1))
+        start = parse_start_type(m.group(1))
     m = re.search(r"DISPLAY_NAME\s*:\s*(.+)", out, re.I)
     if m:
         display = m.group(1).strip()
@@ -95,8 +114,10 @@ def set_start(name: str, start: str) -> tuple[bool, str]:
         set_simulated_service(name, start=start)
         query.cache_clear()
         return (True, "")
+    # NOTE: "start=" and the value must be two separate arguments — passing
+    # "start= disabled" as one argv entry makes sc reject the field.
     rc, out, err = run_sync(  # pragma: no cover - Windows only
-        ["sc", "config", name, f"start= {start}"], timeout=60
+        ["sc", "config", name, "start=", start], timeout=60
     )
     query.cache_clear()
     if rc == 0 and "FAILED" not in out.upper():

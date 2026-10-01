@@ -90,22 +90,29 @@ def main() -> int:
     section("Start-type normalisation (sc qc vs PowerShell spellings)")
     from .core import services
 
-    for raw, expected in (
-        ("AUTO_START", "auto"),
-        ("DEMAND_START", "demand"),
-        ("DISABLED", "disabled"),
-        ("BOOT_START", "boot"),
-        ("SYSTEM_START", "system"),
-        ("2   AUTO_START (DELAYED)", "delayed-auto"),
-        ("Auto", "auto"),
-        ("Manual", "demand"),
-        ("AutoDelayedStart", "delayed-auto"),
-        ("delayed-auto", "delayed-auto"),
-        ("demand", "demand"),
-    ):
-        check(f"normalise_start({raw!r}) == {expected!r}",
-              services.normalise_start(raw) == expected,
-              services.normalise_start(raw))
+    cases: list[tuple[str, str, str]] = [
+        # raw `sc qc` lines: numeric code and the "(DELAYED)" marker included
+        ("parse_start_type", "2   AUTO_START", "auto"),
+        ("parse_start_type", "3   DEMAND_START", "demand"),
+        ("parse_start_type", "4   DISABLED", "disabled"),
+        ("parse_start_type", "0   BOOT_START", "boot"),
+        ("parse_start_type", "1   SYSTEM_START", "system"),
+        ("parse_start_type", "2   AUTO_START (DELAYED)", "delayed-auto"),
+        # bare spellings from sc / PowerShell / CIM
+        ("normalise_start", "AUTO_START", "auto"),
+        ("normalise_start", "DEMAND_START", "demand"),
+        ("normalise_start", "DISABLED", "disabled"),
+        ("normalise_start", "BOOT_START", "boot"),
+        ("normalise_start", "SYSTEM_START", "system"),
+        ("normalise_start", "Auto", "auto"),
+        ("normalise_start", "Manual", "demand"),
+        ("normalise_start", "AutoDelayedStart", "delayed-auto"),
+        ("normalise_start", "delayed-auto", "delayed-auto"),
+        ("normalise_start", "demand", "demand"),
+    ]
+    for fn_name, raw, expected in cases:
+        got = getattr(services, fn_name)(raw)
+        check(f"{fn_name}({raw!r}) == {expected!r}", got == expected, got)
 
     section("Apply → verify → undo")
     # Registry-only, HKCU tweaks work on any machine, elevated or not.
