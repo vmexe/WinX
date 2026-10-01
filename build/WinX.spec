@@ -2,11 +2,17 @@
 """PyInstaller spec for a single-file WinX.exe.
 
     pyinstaller build/WinX.spec --noconfirm --clean
+
+Paths inside a spec are resolved relative to the *spec's* directory, so the
+project root is derived from SPECPATH rather than the current directory.
 """
+
+import os
 
 from PyInstaller.utils.hooks import collect_submodules
 
-ROOT = "."
+SPEC_DIR = os.path.abspath(SPECPATH)
+ROOT = os.path.dirname(SPEC_DIR)
 
 hiddenimports = [
     *collect_submodules("winx"),
@@ -33,10 +39,10 @@ excludes = [
 ]
 
 a = Analysis(
-    [f"{ROOT}/main.py"],
+    [os.path.join(ROOT, "main.py")],
     pathex=[ROOT],
     binaries=[],
-    datas=[(f"{ROOT}/assets", "assets")],
+    datas=[(os.path.join(ROOT, "assets"), "assets")],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
@@ -55,8 +61,8 @@ exe = EXE(
     a.datas,
     [],
     name="WinX",
-    icon=f"{ROOT}/assets/winx.ico",
-    version=f"{ROOT}/build/version_info.txt",
+    icon=os.path.join(ROOT, "assets", "winx.ico"),
+    version=os.path.join(ROOT, "build", "version_info.txt"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
