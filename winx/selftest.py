@@ -26,6 +26,12 @@ FAILED = 0
 FAILURES: list[str] = []
 
 
+def _print_failures(report) -> None:
+    """Show *why* a report failed — otherwise a red CI run is a guessing game."""
+    for step in report.failed:
+        print(f"        !! {step}")
+
+
 def check(name: str, condition: bool, detail: str = "") -> bool:
     global PASSED, FAILED
     if condition:
@@ -124,6 +130,7 @@ def main() -> int:
     before = {t.key: engine.tweak_state(t) for t in sample}
     report = engine.apply_tweaks([(t, True) for t in sample], backup=True)
     check("apply reported success", report.ok, report.summary())
+    _print_failures(report)
     check("backup record created", bool(report.backup_id))
     after = {t.key: engine.tweak_state(t) for t in sample}
     check(
@@ -134,6 +141,7 @@ def main() -> int:
 
     undo_report = engine.undo(report.backup_id)
     check("undo reported success", undo_report.ok, undo_report.summary())
+    _print_failures(undo_report)
     restored = {t.key: engine.tweak_state(t) for t in sample}
     check(
         "state restored to the original values",

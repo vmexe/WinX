@@ -87,7 +87,7 @@ def state_of(name: str) -> str:
 
 
 def set_start(name: str, start: str) -> tuple[bool, str]:
-    """Change a service start-up type."""
+    """Change a service start-up type, verifying that it actually took."""
     start = normalise_start(start)
     if not pf.IS_WINDOWS or pf.simulating():
         from .simdata import set_simulated_service
@@ -96,25 +96,59 @@ def set_start(name: str, start: str) -> tuple[bool, str]:
         query.cache_clear()
         return (True, "")
     rc, out, err = run_sync(  # pragma: no cover - Windows only
-        ["sc", "config", name, f"start={start}"], timeout=60
+        ["sc", "config", name, f"start= {start}"], timeout=60
     )
+    query.cache_clear()
     if rc == 0 and "FAILED" not in out.upper():
-        query.cache_clear()
-        return (True, "")
-    return (False, (err or out or "sc config failed").strip())
+        # sc reports success even when the change is refused; confirm it.
+        actual = normalise_start(query(name).get("start", ""))
+        if not actual or actual == start:
+            return (True, "")
+        return (False, f"requested {start} but the service reports {actual}")
+    return (False, (err or out or "sc config failed").strip()[:300])
 
 
-def control(name: str, action: str) -> tuple[bool, str]:
-    """``start`` / ``stop`` a service."""
+def control(name: str, action: str, timeout: int = 15) -> tuple[bool, str]:
+    """``start`` / ``stop`` a service and wait for it to settle.
+
+    ``sc stop`` returns as soon as the control code is delivered — the service
+    can still be running (``STOP_PENDING``) a second later.  Waiting for the
+    real state is what makes the UI's on/off switch truthful.
+    """
+    want = "RUNNING" if action == "start" else "STOPPED"
     if not pf.IS_WINDOWS or pf.simulating():
         from .simdata import set_simulated_service
 
-        set_simulated_service(name, state="RUNNING" if action == "start" else "STOPPED")
+        set_simulated_service(name, state=want)
         query.cache_clear()
         return (True, "")
+
     rc, out, err = run_sync(["sc", action, name], timeout=120)  # pragma: no cover
-    ok = rc == 0 or "FAILED 1062" in out  # 1062 = already started
-    return (ok, "" if ok else (err or out).strip())
+    # 1056 = already running, 1062 = not started: the outcome is what we asked
+    # for, so treat them as success once the state agrees.
+    acceptable = rc == 0 or "FAILED 1056" in out or "FAILED 1062" in out
+    state = state_of(name)
+    if acceptable and state == want:
+        query.cache_clear()
+        return (True, "")
+
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:  # pragma: no cover - timing dependent
+        time.sleep(0.4)
+        state = state_of(name)
+        if state == want:
+            query.cache_clear()
+            return (True, "")
+        if not state:
+            break
+
+    if state == want:  # pragma: no cover
+        query.cache_clear()
+        return (True, "")
+    detail = (err or out or "").strip().replace("\n", " ")[:300]
+    return (False, detail or f"service did not {action} (state: {state or 'unknown'})")
 
 
 def list_services(include_windows: bool = False) -> list[dict]:
