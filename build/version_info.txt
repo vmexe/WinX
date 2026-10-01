@@ -1,8 +1,8 @@
 ﻿# Windows executable metadata (UTF-8 with BOM, ASCII only)
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 0, 0, 0),
-    prodvers=(1, 0, 0, 0),
+    filevers=(1, 0, 1, 0),
+    prodvers=(1, 0, 1, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -16,12 +16,12 @@ VSVersionInfo(
         u'040904b0',
         [StringStruct(u'CompanyName', u'vmexe'),
          StringStruct(u'FileDescription', u'WinX - Windows all-in-one utility'),
-         StringStruct(u'FileVersion', u'1.0.0.0'),
+         StringStruct(u'FileVersion', u'1.0.1.0'),
          StringStruct(u'InternalName', u'WinX'),
          StringStruct(u'LegalCopyright', u'Apache-2.0'),
          StringStruct(u'OriginalFilename', u'WinX.exe'),
          StringStruct(u'ProductName', u'WinX'),
-         StringStruct(u'ProductVersion', u'1.0.0.0')])
+         StringStruct(u'ProductVersion', u'1.0.1.0')])
     ]),
     VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
   ]

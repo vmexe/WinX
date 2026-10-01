@@ -42,6 +42,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Catches broken intra-package imports in modules CI cannot import
+      # headlessly (the whole UI layer needs the Qt runtime).
+      - name: Check intra-package imports
+        run: python tools/check_imports.py
+
+      # Qt is usable on the Windows runner, so actually import every module
+      # there — including the GUI layer the self-test never touches.
+      - name: Import every module
+        if: runner.os == 'Windows'
+        run: >
+          python -c "import importlib, pkgutil, winx;
+          mods=[m.name for m in pkgutil.walk_packages(winx.__path__, 'winx.')];
+          [importlib.import_module(m) for m in mods];
+          print(f'imported {len(mods)} modules')"
+
       - name: Run the self-test
         id: selftest
         shell: bash
@@ -108,10 +123,15 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: python tools/post_ci_output.py build.log "build (windows-latest)"
 
+      # Imports the entire app, GUI layer included, inside the frozen exe.
+      # Must fail the build: a missing module only shows up here.
       - name: Smoke-test the executable
+        shell: pwsh
         run: |
-          ./dist/WinX.exe --version
-        continue-on-error: true
+          $out = & ./dist/WinX.exe --version 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw "WinX.exe --version exited $LASTEXITCODE" }
+          if ($out -notmatch 'WinX') { throw "unexpected --version output" }
 
       - name: Package portable zip
         shell: pwsh

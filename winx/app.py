@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from . import __app_name__, __version__
-from .config import Settings, log_file
+from .core.config import Settings, log_file
 from .core import platform as pf
 from .core.backup import BackupManager
 from .core.console import ensure_utf8_console
