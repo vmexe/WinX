@@ -1,4 +1,4 @@
-# Windows executable metadata (UTF-8)
+﻿# Windows executable metadata (UTF-8 with BOM, ASCII only)
 VSVersionInfo(
   ffi=FixedFileInfo(
     filevers=(1, 0, 0, 0),
@@ -15,7 +15,7 @@ VSVersionInfo(
       StringTable(
         u'040904b0',
         [StringStruct(u'CompanyName', u'vmexe'),
-         StringStruct(u'FileDescription', u'WinX — Windows all-in-one utility'),
+         StringStruct(u'FileDescription', u'WinX - Windows all-in-one utility'),
          StringStruct(u'FileVersion', u'1.0.0.0'),
          StringStruct(u'InternalName', u'WinX'),
          StringStruct(u'LegalCopyright', u'Apache-2.0'),

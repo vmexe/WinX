@@ -82,7 +82,22 @@ jobs:
         run: python tools/make_icon.py
 
       - name: Build with PyInstaller
-        run: pyinstaller build/WinX.spec --noconfirm --clean
+        id: build
+        shell: bash
+        run: |
+          set +e
+          pyinstaller build/WinX.spec --noconfirm --clean > build.log 2>&1
+          code=$?
+          cat build.log
+          exit $code
+
+      - name: Post build log to the PR
+        if: always() && steps.build.outcome == 'failure' && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python tools/post_ci_output.py build.log "build (windows-latest)"
 
       - name: Smoke-test the executable
         run: |
