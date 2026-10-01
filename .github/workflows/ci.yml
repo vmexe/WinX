@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   # ---------------------------------------------------------------------
@@ -37,7 +38,23 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run the self-test
-        run: python main.py --selftest
+        id: selftest
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python main.py --selftest 2>&1 | tee selftest.txt
+
+      - name: Post self-test output to the PR
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          { echo '### Self-test output ('"${{ matrix.os }}"')'; echo '```'; cat selftest.txt; echo '```'; } > body.md
+          gh pr comment "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --body-file body.md
+
+      - name: Fail the job if the self-test failed
+        if: steps.selftest.outcome == 'failure'
+        run: exit 1
 
   # ---------------------------------------------------------------------
   # Builds the single-file GUI executable.
