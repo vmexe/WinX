@@ -8,21 +8,44 @@ from functools import lru_cache
 from . import platform as pf
 from .runner import run_sync
 
+#: Windows accepts these values for ``sc config <name> start= <value>``
+SC_START_VALUES = ("boot", "system", "auto", "demand", "disabled", "delayed-auto")
+
 _START_MAP = {
+    # sc qc tokens (START_TYPE : 2 AUTO_START)
+    "auto_start": "auto",
+    "demand_start": "demand",
+    "boot_start": "boot",
+    "system_start": "system",
+    # PowerShell StartMode values (Auto, Manual, Disabled, AutoDelayedStart)
     "auto": "auto",
     "automatic": "auto",
-    "delayed-auto": "delayed-auto",
-    "automatic-delayed": "delayed-auto",
-    "demand": "demand",
     "manual": "demand",
+    "demand": "demand",
     "disabled": "disabled",
+    "autodelayedstart": "delayed-auto",
+    "automatic-delayed": "delayed-auto",
+    "delayed-auto": "delayed-auto",
+    "delayedauto": "delayed-auto",
     "boot": "boot",
     "system": "system",
 }
 
 
 def normalise_start(value: str) -> str:
-    v = (value or "").strip().lower().replace(" ", "-")
+    """Normalise any start-type spelling to a canonical token.
+
+    Handles both `sc qc` (``AUTO_START``) and PowerShell/CIM (``Auto``,
+    ``Manual``) spellings; a delayed auto-start is reported as
+    ``delayed-auto``.
+    """
+    v = (value or "").strip().lower()
+    if not v:
+        return ""
+    if "delayed" in v:
+        return "delayed-auto"
+    v = v.replace(" ", "-").replace("_", "-")
+    v = v.replace("-start", "")
     return _START_MAP.get(v, v)
 
 
@@ -40,8 +63,9 @@ def query(name: str) -> dict:
         return {"exists": False, "start": "", "state": "", "display": name}
     start = ""
     display = name
-    m = re.search(r"START_TYPE\s*:\s*\d+\s+(\S+)", out, re.I)
+    m = re.search(r"START_TYPE\s*:\s*(.+)", out, re.I)
     if m:
+        # e.g. "2   AUTO_START" or "2   AUTO_START (DELAYED)"
         start = normalise_start(m.group(1))
     m = re.search(r"DISPLAY_NAME\s*:\s*(.+)", out, re.I)
     if m:

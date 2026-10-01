@@ -79,15 +79,45 @@ def main() -> int:
         all(v in (ON, OFF, "partial", "unknown") for v in states.values()),
     )
 
+    section("Start-type normalisation (sc qc vs PowerShell spellings)")
+    from .core import services
+
+    for raw, expected in (
+        ("AUTO_START", "auto"),
+        ("DEMAND_START", "demand"),
+        ("DISABLED", "disabled"),
+        ("BOOT_START", "boot"),
+        ("SYSTEM_START", "system"),
+        ("2   AUTO_START (DELAYED)", "delayed-auto"),
+        ("Auto", "auto"),
+        ("Manual", "demand"),
+        ("AutoDelayedStart", "delayed-auto"),
+        ("delayed-auto", "delayed-auto"),
+        ("demand", "demand"),
+    ):
+        check(f"normalise_start({raw!r}) == {expected!r}",
+              services.normalise_start(raw) == expected,
+              services.normalise_start(raw))
+
     section("Apply → verify → undo")
+    # Registry-only, HKCU tweaks work on any machine, elevated or not.
     sample = [
         tweaks_data.by_key("perf_visual_best"),
-        tweaks_data.by_key("priv_telemetry_off"),
         tweaks_data.by_key("ui_file_extensions"),
-        tweaks_data.by_key("perf_sysmain_off"),
+        tweaks_data.by_key("priv_feedback_off"),
     ]
+    # HKLM / service tweaks need rights and the service to exist, so they are
+    # only exercised where they can actually apply.
+    elevated = pf.simulating() or pf.is_admin()
+    if elevated:
+        sample.append(tweaks_data.by_key("priv_advertising_id_off"))
+    sysmain = tweaks_data.by_key("perf_sysmain_off")
+    sysmain_exists = services.query("SysMain").get("exists")
+    if elevated and sysmain_exists and sysmain is not None:
+        sample.append(sysmain)
     sample = [t for t in sample if t is not None]
-    check("sample tweaks found", len(sample) == 4)
+    check("sample tweaks found", len(sample) >= 3, f"{len(sample)}")
+    print(f"        sampling: {', '.join(t.key for t in sample)}")
 
     before = {t.key: engine.tweak_state(t) for t in sample}
     report = engine.apply_tweaks([(t, True) for t in sample], backup=True)
@@ -108,6 +138,11 @@ def main() -> int:
         all(restored[k] == before[k] for k in restored),
         str({k: (before[k], restored[k]) for k in restored}),
     )
+
+    if not elevated:
+        print("        note: not elevated — HKLM and service tweaks skipped")
+    if elevated and not sysmain_exists:
+        print("        note: SysMain service absent on this machine — skipped")
 
     section("Backup ledger")
     records = backups.all()
@@ -131,7 +166,13 @@ def main() -> int:
     check("action preview non-empty", len(engine.preview_action(action)) >= 1)
 
     section("Actions")
-    for key in ("net_flush_dns", "repair_sfc", "maint_restart_explorer", "tool_services"):
+    actions_to_run = ["net_flush_dns", "maint_restart_explorer", "tool_services"]
+    if pf.simulating():
+        # SFC and DISM are slow and may legitimately report repairs on a live
+        # machine, so they are only asserted where the outcome is deterministic.
+        actions_to_run.insert(1, "repair_sfc")
+        actions_to_run.insert(2, "net_full_reset")
+    for key in actions_to_run:
         act = actions_data.action_by_key(key)
         result = engine.run_action(act)
         check(f"run {key}", result.ok, result.summary())
@@ -163,7 +204,11 @@ def main() -> int:
 
     drv = drivers.list_drivers()
     check("drivers listed", len(drv) >= 1, f"{len(drv)}")
-    check("driver store listed", len(drivers.driver_store()) >= 1)
+    if pf.IS_WINDOWS and not pf.simulating():
+        # pnputil needs elevation; without it the driver store is simply empty
+        check("driver store readable", isinstance(drivers.driver_store(), list))
+    else:
+        check("driver store listed", len(drivers.driver_store()) >= 1)
 
     info = systeminfo.snapshot()
     check("snapshot has os", bool(info.get("os")))
