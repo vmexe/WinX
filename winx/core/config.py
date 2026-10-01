@@ -12,7 +12,7 @@ from . import platform as pf
 
 APP_NAME = "WinX"
 ORG_NAME = "vmexe"
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 
 
 def _base_dir() -> Path:

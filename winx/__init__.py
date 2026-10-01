@@ -10,6 +10,6 @@ and the registry is backed by a JSON file.  That keeps the whole UI testable
 (and demoable) on Linux/macOS.
 """
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 __app_name__ = "WinX"
 __app_id__ = "io.github.vmexe.WinX"
