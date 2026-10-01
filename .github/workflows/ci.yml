@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------
+  # The self-test exercises the whole engine: apply, verify, undo, plus
+  # every enumeration module. On Windows it runs live; on Linux it runs
+  # the same code through simulation mode.
+  # ---------------------------------------------------------------------
+  selftest:
+    name: Self-test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run the self-test
+        run: python main.py --selftest
+
+  # ---------------------------------------------------------------------
+  # Builds the single-file GUI executable.
+  # ---------------------------------------------------------------------
+  build:
+    name: Build WinX.exe
+    needs: selftest
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install "pyinstaller>=6.3"
+
+      - name: Generate the application icon
+        run: python tools/make_icon.py
+
+      - name: Build with PyInstaller
+        run: pyinstaller build/WinX.spec --noconfirm --clean
+
+      - name: Smoke-test the executable
+        run: |
+          ./dist/WinX.exe --version
+        continue-on-error: true
+
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path release -Force | Out-Null
+          Copy-Item dist/WinX.exe release/
+          Copy-Item README.md, LICENSE release/
+          Compress-Archive -Path release/* -DestinationPath WinX-Windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WinX-Windows-x64
+          path: |
+            dist/WinX.exe
+            WinX-Windows-x64.zip
+          if-no-files-found: error
+
+      - name: Attach the build to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/WinX.exe
+            WinX-Windows-x64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
