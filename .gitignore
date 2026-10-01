@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Builds
+build/WinX/
+build/dist/
+dist/
+*.spec.bak
+*.manifest
+
+# App data / local artefacts
+screenshots/
+*.log
+.DS_Store
+Thumbs.db

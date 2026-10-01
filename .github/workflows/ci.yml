@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  # ---------------------------------------------------------------------
+  # The self-test exercises the whole engine: apply, verify, undo, plus
+  # every enumeration module. On Windows it runs live; on Linux it runs
+  # the same code through simulation mode.
+  # ---------------------------------------------------------------------
+  selftest:
+    name: Self-test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run the self-test
+        id: selftest
+        shell: bash
+        run: |
+          set +e
+          python main.py --selftest > selftest.txt 2>&1
+          code=$?
+          cat selftest.txt
+          exit $code
+
+      # Posted on failure so a broken matrix job can be diagnosed from the
+      # conversation even when the job log cannot be downloaded.
+      - name: Post self-test output to the PR
+        if: always() && steps.selftest.outcome == 'failure' && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python tools/post_ci_output.py selftest.txt "${{ matrix.os }}"
+
+  # ---------------------------------------------------------------------
+  # Builds the single-file GUI executable.
+  # ---------------------------------------------------------------------
+  build:
+    name: Build WinX.exe
+    needs: selftest
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install "pyinstaller>=6.3"
+
+      - name: Generate the application icon
+        run: python tools/make_icon.py
+
+      - name: Build with PyInstaller
+        id: build
+        shell: bash
+        run: |
+          set +e
+          pyinstaller build/WinX.spec --noconfirm --clean > build.log 2>&1
+          code=$?
+          cat build.log
+          exit $code
+
+      - name: Post build log to the PR
+        if: always() && steps.build.outcome == 'failure' && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python tools/post_ci_output.py build.log "build (windows-latest)"
+
+      - name: Smoke-test the executable
+        run: |
+          ./dist/WinX.exe --version
+        continue-on-error: true
+
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path release -Force | Out-Null
+          Copy-Item dist/WinX.exe release/
+          Copy-Item README.md, LICENSE release/
+          Compress-Archive -Path release/* -DestinationPath WinX-Windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WinX-Windows-x64
+          path: |
+            dist/WinX.exe
+            WinX-Windows-x64.zip
+          if-no-files-found: error
+
+      - name: Attach the build to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/WinX.exe
+            WinX-Windows-x64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
