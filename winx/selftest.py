@@ -293,7 +293,8 @@ def main() -> int:
     )
 
     section("Page caching")
-    from .ui.pages.base import age_text
+    # imported from core (not the UI) so the self-test never needs Qt
+    from .core.format import human_age as age_text
 
     check("age text: fresh", age_text(2) == "just now")
     check("age text: minutes", age_text(300) == "5 minutes ago")

@@ -52,3 +52,17 @@ def timestamp_str(ts: float | None = None) -> str:
 
 def plural(count: int, singular: str, plural_form: str | None = None) -> str:
     return f"{count} {singular if count == 1 else (plural_form or singular + 's')}"
+
+
+def human_age(seconds: float) -> str:
+    """``90`` -> ``'1 minute ago'``; used by the pages' "Updated …" line."""
+    seconds = int(max(0, seconds))
+    if seconds < 10:
+        return "just now"
+    if seconds < 90:
+        return f"{seconds} seconds ago"
+    minutes = seconds // 60
+    if minutes < 90:
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    hours = minutes // 60
+    return f"{hours} hour{'s' if hours != 1 else ''} ago"

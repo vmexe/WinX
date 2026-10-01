@@ -6,21 +6,8 @@ import time
 
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QTabWidget, QVBoxLayout, QWidget
 
+from ...core.format import human_age as age_text
 from ..context import AppContext
-
-
-def age_text(seconds: float) -> str:
-    """``90`` -> ``'1 minute ago'``."""
-    seconds = int(max(0, seconds))
-    if seconds < 10:
-        return "just now"
-    if seconds < 90:
-        return f"{seconds} seconds ago"
-    minutes = seconds // 60
-    if minutes < 90:
-        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
-    hours = minutes // 60
-    return f"{hours} hour{'s' if hours != 1 else ''} ago"
 
 
 class Page(QWidget):
