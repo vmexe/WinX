@@ -1,12 +1,15 @@
-"""Disks page: volumes, health, storage analysis and duplicate files."""
+"""Disks: volumes, drive health and storage analysis."""
 
 from __future__ import annotations
 
+import os
+
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
+    QFileDialog,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -23,142 +26,122 @@ from ...core.format import human_size
 from ...core.workers import submit
 from ...modules import disks
 from ..context import AppContext
-from ..icons import icon
-from ..widgets import Badge, LogConsole, ProgressRow, StatCard
+from ..widgets import ProgressRow
 from .base import Page
 
 
 class DisksPage(Page):
     key = "disks"
     title = "Disks"
-    subtitle = "Free space, drive health, and what is actually eating your disk."
-    icon_name = "drive"
+    subtitle = "Drive health, and where your space has gone."
 
     def __init__(self, ctx: AppContext):
         super().__init__(ctx)
-        self._worker = None
         self.volumes: list[disks.Volume] = []
-        self._build()
-
-    def _build(self) -> None:
-        layout = self.content_layout
-
-        header = QHBoxLayout()
-        heading = QLabel("Disks")
-        font = QFont()
-        font.setPointSize(18)
-        font.setWeight(QFont.Weight.Bold)
-        heading.setFont(font)
-        header.addWidget(heading)
-        header.addStretch(1)
-        self.btn_refresh = QPushButton(" Refresh")
-        self.btn_refresh.setIcon(icon("refresh", self.ctx.accent, 16))
-        self.btn_refresh.clicked.connect(self.refresh)
-        header.addWidget(self.btn_refresh)
-        layout.addLayout(header)
-
-        sub = QLabel(self.subtitle)
-        sub.setProperty("muted", True)
-        layout.addWidget(sub)
-
-        self.volumes_row = QHBoxLayout()
-        self.volumes_row.setSpacing(10)
-        layout.addLayout(self.volumes_row)
+        self._worker = None
 
         self.tabs = QTabWidget()
-        layout.addWidget(self.tabs, 1)
+        self.layout_.addWidget(self.tabs, 1)
+        self.tabs.addTab(self._build_volumes(), "Volumes")
+        self.tabs.addTab(self._build_health(), "Drive health")
+        self.tabs.addTab(self._build_analysis(), "Storage analysis")
 
-        # folders tab
-        folders = QWidget()
-        fl = QVBoxLayout(folders)
-        bar = QHBoxLayout()
-        self.drive_combo = QComboBox()
-        self.drive_combo.setMinimumWidth(180)
-        self.drive_combo.currentTextChanged.connect(self._populate_drives_dependent)
-        bar.addWidget(QLabel("Drive:"))
-        bar.addWidget(self.drive_combo)
-        self.btn_folders = QPushButton("Analyse folders")
-        self.btn_folders.clicked.connect(self._analyse_folders)
-        self.btn_large = QPushButton("Find large files")
-        self.btn_large.clicked.connect(self._find_large)
-        self.min_size = QSpinBox()
-        self.min_size.setRange(1, 10000)
-        self.min_size.setValue(100)
-        self.min_size.setSuffix(" MB")
-        self.min_size.setFixedWidth(110)
-        bar.addWidget(self.btn_folders)
-        bar.addWidget(self.btn_large)
-        bar.addWidget(QLabel("Larger than"))
-        bar.addWidget(self.min_size)
-        bar.addStretch(1)
-        fl.addLayout(bar)
-        self.folders_tree = QTreeWidget()
-        self.folders_tree.setHeaderLabels(["Path", "Size", "Files"])
-        self.folders_tree.setColumnWidth(0, 620)
-        self.folders_tree.setColumnWidth(1, 110)
-        self.folders_tree.setRootIsDecorated(False)
-        self.folders_tree.setAlternatingRowColors(True)
-        self.folders_tree.setMinimumHeight(240)
-        fl.addWidget(self.folders_tree, 1)
-        actions = QHBoxLayout()
-        self.btn_open = QPushButton("Open location")
-        self.btn_open.clicked.connect(self._open_selected)
-        self.btn_delete_file = QPushButton("Delete selected file")
-        self.btn_delete_file.setProperty("danger", True)
-        self.btn_delete_file.clicked.connect(self._delete_selected)
-        actions.addWidget(self.btn_open)
-        actions.addWidget(self.btn_delete_file)
-        actions.addStretch(1)
-        fl.addLayout(actions)
-        self.tabs.addTab(folders, "Storage analysis")
+        self.progress = ProgressRow(cancellable=True)
+        self.progress.cancel_button.clicked.connect(self._cancel)
+        self.layout_.addWidget(self.progress)
 
-        # duplicates tab
-        dups = QWidget()
-        dl = QVBoxLayout(dups)
-        dbar = QHBoxLayout()
-        self.btn_dups = QPushButton("Find duplicate files")
-        self.btn_dups.clicked.connect(self._find_duplicates)
-        self.dup_min = QSpinBox()
-        self.dup_min.setRange(1, 5000)
-        self.dup_min.setValue(5)
-        self.dup_min.setSuffix(" MB")
-        self.dup_min.setFixedWidth(110)
-        dbar.addWidget(self.btn_dups)
-        dbar.addWidget(QLabel("Minimum size"))
-        dbar.addWidget(self.dup_min)
-        dbar.addStretch(1)
-        dl.addLayout(dbar)
-        self.dups_tree = QTreeWidget()
-        self.dups_tree.setHeaderLabels(["Group / File", "Size", "Reclaimable"])
-        self.dups_tree.setColumnWidth(0, 620)
-        self.dups_tree.setColumnWidth(1, 110)
-        self.dups_tree.setAlternatingRowColors(True)
-        self.dups_tree.setMinimumHeight(240)
-        dl.addWidget(self.dups_tree, 1)
-        self.tabs.addTab(dups, "Duplicates")
+    # -- tabs ------------------------------------------------------------
+    def _build_volumes(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self.volumes_tree = QTreeWidget()
+        self.volumes_tree.setColumnCount(8)
+        self.volumes_tree.setHeaderLabels(
+            ["Drive", "Label", "File system", "Media", "Health", "Capacity", "Free", "Used"]
+        )
+        self.volumes_tree.setRootIsDecorated(False)
+        self.volumes_tree.setAlternatingRowColors(True)
+        self.volumes_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.volumes_tree, 1)
 
-        # health tab
-        health = QWidget()
-        hl = QVBoxLayout(health)
+        buttons = QHBoxLayout()
+        self.btn_refresh = QPushButton("Refresh")
+        self.btn_refresh.clicked.connect(self.refresh)
+        buttons.addWidget(self.btn_refresh)
+        self.btn_optimise = QPushButton("Optimise drive")
+        self.btn_optimise.clicked.connect(self._optimise)
+        buttons.addWidget(self.btn_optimise)
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
+        return page
+
+    def _build_health(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
         self.health_tree = QTreeWidget()
-        self.health_tree.setHeaderLabels(["Disk", "Type", "Health", "Power-on hours", "Read errors", "Temp"])
-        self.health_tree.setColumnWidth(0, 260)
+        self.health_tree.setColumnCount(7)
+        self.health_tree.setHeaderLabels(
+            ["Disk", "Media", "Health", "Power-on hours", "Read errors", "Write errors", "Temperature"]
+        )
         self.health_tree.setRootIsDecorated(False)
         self.health_tree.setAlternatingRowColors(True)
-        hl.addWidget(self.health_tree, 1)
-        self.tabs.addTab(health, "Health")
+        self.health_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.health_tree, 1)
+        return page
 
-        self.progress = ProgressRow()
-        layout.addWidget(self.progress)
-        self.console = LogConsole(placeholder="Disk analysis output…")
-        self.console.setFixedHeight(110)
-        layout.addWidget(self.console)
+    def _build_analysis(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("Folder:"))
+        self.root_combo = QComboBox()
+        self.root_combo.setEditable(True)
+        self.root_combo.setMinimumWidth(260)
+        controls.addWidget(self.root_combo, 1)
+        self.btn_browse = QPushButton("Browse…")
+        self.btn_browse.clicked.connect(self._browse)
+        controls.addWidget(self.btn_browse)
+
+        controls.addWidget(QLabel("Minimum size (MB):"))
+        self.min_size = QSpinBox()
+        self.min_size.setRange(1, 100000)
+        self.min_size.setValue(50)
+        controls.addWidget(self.min_size)
+        layout.addLayout(controls)
+
+        self.analysis_tree = QTreeWidget()
+        self.analysis_tree.setColumnCount(3)
+        self.analysis_tree.setHeaderLabels(["Path", "Size", "Files"])
+        self.analysis_tree.setAlternatingRowColors(True)
+        self.analysis_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.analysis_tree.itemActivated.connect(self._open_selected)
+        layout.addWidget(self.analysis_tree, 1)
+
+        buttons = QHBoxLayout()
+        self.btn_folders = QPushButton("Folder sizes")
+        self.btn_folders.clicked.connect(self._folder_sizes)
+        buttons.addWidget(self.btn_folders)
+        self.btn_large = QPushButton("Largest files")
+        self.btn_large.clicked.connect(self._largest_files)
+        buttons.addWidget(self.btn_large)
+        self.btn_dups = QPushButton("Find duplicates")
+        self.btn_dups.clicked.connect(self._duplicates)
+        buttons.addWidget(self.btn_dups)
+        buttons.addStretch(1)
+        self.btn_open = QPushButton("Open location")
+        self.btn_open.clicked.connect(self._open_selected)
+        buttons.addWidget(self.btn_open)
+        layout.addLayout(buttons)
+        return page
 
     # -- data ------------------------------------------------------------
     def refresh(self) -> None:
+        self.btn_refresh.setEnabled(False)
+        self.progress.start("Reading drives…")
         worker = submit(self._load)
         worker.signals.result.connect(self._on_loaded)
-        worker.signals.error.connect(self._on_error)
+        worker.signals.error.connect(self._on_failed)
 
     def _load(self):
         # An explicit visit to this page is the one place that wants live
@@ -167,199 +150,176 @@ class DisksPage(Page):
         return (disks.volumes(), disks.smart_report())
 
     def _on_loaded(self, payload) -> None:
+        self.btn_refresh.setEnabled(True)
         volumes, smart = payload
         self.volumes = volumes
-        self._populate_volumes()
-        self._populate_health(smart)
-        self.drive_combo.blockSignals(True)
-        self.drive_combo.clear()
-        for v in volumes:
-            self.drive_combo.addItem(f"{v.drive}  {v.label}".strip(), v.mount)
-        self.drive_combo.blockSignals(False)
-        self.status(f"{len(volumes)} volume(s) detected")
+        self.progress.stop("")
 
-    def _populate_volumes(self) -> None:
-        while self.volumes_row.count():
-            item = self.volumes_row.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
-        for vol in self.volumes:
-            card = StatCard(
-                f"{vol.drive} {vol.label}".strip(),
-                vol.free_text + " free",
-                f"{vol.total_text} total · {vol.used_pct}% used · {vol.media or vol.fs}".strip(" ·"),
-                "drive",
-            )
-            card.bar.show()
-            card.bar.setValue(vol.used_pct)
-            if vol.used_pct >= 90:
-                card.bar.setStyleSheet("QProgressBar::chunk { background: #ff6b6b; }")
-            elif vol.used_pct >= 75:
-                card.bar.setStyleSheet("QProgressBar::chunk { background: #f5c451; }")
-
-            buttons = QHBoxLayout()
-            btn_opt = QPushButton("Optimise")
-            btn_opt.clicked.connect(lambda _c=False, v=vol: self._optimise(v))
-            buttons.addWidget(btn_opt)
-            card.layout().addLayout(buttons)
-
-            if vol.smart and vol.smart.lower() not in ("ok", "healthy", ""):
-                card.layout().addWidget(Badge(vol.smart, "#ff6b6b"))
-            self.volumes_row.addWidget(card)
-
-    def _populate_health(self, rows) -> None:
-        self.health_tree.clear()
-        for row in rows:
+        self.volumes_tree.clear()
+        for vol in volumes:
             item = QTreeWidgetItem(
                 [
-                    str(row.get("disk", "")),
-                    str(row.get("model", "")),
-                    str(row.get("health", "")),
-                    str(row.get("power_hours", "") or "—"),
-                    str(row.get("read_errors", "") or "—"),
-                    f"{row['temp_c']}°C" if row.get("temp_c") else "—",
+                    vol.drive,
+                    vol.label,
+                    vol.fs,
+                    vol.media,
+                    vol.health,
+                    vol.total_text,
+                    vol.free_text,
+                    f"{vol.used_pct}%",
                 ]
             )
-            health = str(row.get("health", "")).lower()
-            if health and health not in ("healthy", "ok"):
-                item.setForeground(2, _color("#ff6b6b"))
-            self.health_tree.addTopLevelItem(item)
+            item.setData(0, Qt.ItemDataRole.UserRole, vol)
+            self.volumes_tree.addTopLevelItem(item)
+        self.volumes_tree.resizeColumnToContents(0)
 
-    def _populate_drives_dependent(self, *_args) -> None:
-        pass
+        self.health_tree.clear()
+        for row in smart:
+            self.health_tree.addTopLevelItem(
+                QTreeWidgetItem(
+                    [
+                        str(row.get("disk", "")),
+                        str(row.get("model", "")),
+                        str(row.get("health", "")),
+                        str(row.get("power_hours") or "—"),
+                        str(row.get("read_errors") if row.get("read_errors") is not None else "—"),
+                        str(row.get("write_errors") if row.get("write_errors") is not None else "—"),
+                        f"{row.get('temp_c')} °C" if row.get("temp_c") else "—",
+                    ]
+                )
+            )
+
+        current = self.root_combo.currentText()
+        self.root_combo.clear()
+        self.root_combo.addItems([v.mount or v.drive for v in volumes] or [os.path.expanduser("~")])
+        if current:
+            self.root_combo.setEditText(current)
+        self.status(f"{len(volumes)} volume(s)")
+
+    def _on_failed(self, message: str) -> None:
+        self.btn_refresh.setEnabled(True)
+        self._set_busy(False)
+        self.progress.stop("Failed")
+        self.on_error(message)
 
     # -- analysis --------------------------------------------------------
-    def _current_root(self) -> str:
-        return self.drive_combo.currentData() or (self.volumes[0].mount if self.volumes else "/")
+    def _root(self) -> str:
+        return self.root_combo.currentText().strip() or os.path.expanduser("~")
 
-    def _analyse_folders(self) -> None:
-        self.folders_tree.clear()
-        self.progress.start("Measuring folders…")
-        root = self._current_root()
-        worker = submit(self._folders, root)
-        worker.signals.progress.connect(lambda d, t, m: self.progress.set(d, t, m or "Measuring…"))
-        worker.signals.result.connect(self._on_folders)
-        worker.signals.error.connect(self._on_error)
+    def _browse(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Choose a folder to analyse", self._root())
+        if folder:
+            self.root_combo.setEditText(folder)
 
-    def _folders(self, root, progress=None, is_cancelled=None):
+    def _start(self, fn, *args, message: str = "Working…"):
+        self._set_busy(True)
+        self.progress.start(message)
+        self.analysis_tree.clear()
+        self._worker = submit(fn, *args)
+        self._worker.signals.progress.connect(lambda d, t, m: self.progress.set(d, t, m))
+        self._worker.signals.error.connect(self._on_failed)
+        return self._worker
+
+    def _folder_sizes(self) -> None:
+        worker = self._start(self._do_folders, self._root(), message="Measuring folders…")
+        worker.signals.result.connect(self._show_entries)
+
+    def _do_folders(self, root, progress=None, is_cancelled=None):
         return disks.folder_sizes(root, depth=2, progress=progress, is_cancelled=is_cancelled)
 
-    def _on_folders(self, entries) -> None:
-        self.progress.stop(f"{len(entries)} folders measured")
-        self.folders_tree.clear()
-        for entry in entries[:200]:
-            item = QTreeWidgetItem([entry.path, entry.size_text, f"{entry.files:,}"])
+    def _largest_files(self) -> None:
+        worker = self._start(
+            self._do_largest, self._root(), self.min_size.value(), message="Looking for large files…"
+        )
+        worker.signals.result.connect(self._show_entries)
+
+    def _do_largest(self, root, min_mb, progress=None, is_cancelled=None):
+        return disks.largest_files(
+            root, top_n=200, min_size=min_mb * 1024 * 1024, progress=progress, is_cancelled=is_cancelled
+        )
+
+    def _duplicates(self) -> None:
+        worker = self._start(
+            self._do_dups, [self._root()], self.min_size.value(), message="Comparing files…"
+        )
+        worker.signals.result.connect(self._show_duplicates)
+
+    def _do_dups(self, roots, min_mb, progress=None, is_cancelled=None):
+        return disks.find_duplicates(
+            roots, min_size=min_mb * 1024 * 1024, progress=progress, is_cancelled=is_cancelled
+        )
+
+    def _show_entries(self, entries: list) -> None:
+        self._set_busy(False)
+        self.analysis_tree.clear()
+        for entry in entries:
+            item = QTreeWidgetItem([entry.path, entry.size_text, str(entry.files or "")])
             item.setData(0, Qt.ItemDataRole.UserRole, entry.path)
-            self.folders_tree.addTopLevelItem(item)
-        self.log(f"Folder analysis: {len(entries)} folders, largest {entries[0].size_text if entries else '—'}", "ok")
+            self.analysis_tree.addTopLevelItem(item)
+        total = sum(e.size for e in entries)
+        self.progress.stop(f"{len(entries)} results — {human_size(total)}")
 
-    def _find_large(self) -> None:
-        self.folders_tree.clear()
-        self.progress.start("Searching for large files…")
-        root = self._current_root()
-        min_size = self.min_size.value() * 1024 * 1024
-        worker = submit(self._large, root, min_size)
-        worker.signals.progress.connect(lambda d, _t, m: self.progress.set(d, 0, m or "Scanning…"))
-        worker.signals.result.connect(self._on_folders)
-        worker.signals.error.connect(self._on_error)
-
-    def _large(self, root, min_size, progress=None, is_cancelled=None):
-        return disks.largest_files(root, top_n=200, min_size=min_size, progress=progress, is_cancelled=is_cancelled)
-
-    def _find_duplicates(self) -> None:
-        self.dups_tree.clear()
-        self.progress.start("Hashing files…")
-        roots = [v.mount for v in self.volumes] or [self._current_root()]
-        min_size = self.dup_min.value() * 1024 * 1024
-        worker = submit(self._dups, roots, min_size)
-        worker.signals.progress.connect(lambda d, t, m: self.progress.set(d, t, m or "Comparing…"))
-        worker.signals.result.connect(self._on_dups)
-        worker.signals.error.connect(self._on_error)
-
-    def _dups(self, roots, min_size, progress=None, is_cancelled=None):
-        return disks.find_duplicates(roots, min_size=min_size, progress=progress, is_cancelled=is_cancelled)
-
-    def _on_dups(self, groups) -> None:
-        self.progress.stop(f"{len(groups)} duplicate group(s)")
-        wasted = sum(g.wasted for g in groups)
-        for group in groups[:150]:
-            parent = QTreeWidgetItem([f"{len(group.paths)} identical files", human_size(group.size), group.wasted_text])
-            self.dups_tree.addTopLevelItem(parent)
+    def _show_duplicates(self, groups: list) -> None:
+        self._set_busy(False)
+        self.analysis_tree.clear()
+        wasted = 0
+        for group in groups:
+            parent = QTreeWidgetItem(
+                [f"{len(group.paths)} copies", human_size(group.size), group.wasted_text]
+            )
             for path in group.paths:
-                child = QTreeWidgetItem([path, human_size(group.size), ""])
+                child = QTreeWidgetItem([path, "", ""])
                 child.setData(0, Qt.ItemDataRole.UserRole, path)
                 parent.addChild(child)
-            parent.setExpanded(False)
-        self.log(f"Found {len(groups)} duplicate groups ({human_size(wasted)} reclaimable)", "ok")
-        self.status(f"{human_size(wasted)} reclaimable in duplicates")
+            self.analysis_tree.addTopLevelItem(parent)
+            wasted += group.wasted
+        self.analysis_tree.expandAll()
+        self.progress.stop(f"{len(groups)} duplicate group(s) — {human_size(wasted)} wasted")
 
-    # -- actions ---------------------------------------------------------
-    def _selected_path(self) -> str | None:
-        tree = self.folders_tree if self.tabs.currentIndex() == 0 else self.dups_tree
-        items = tree.selectedItems()
-        if not items:
-            return None
-        return items[0].data(0, Qt.ItemDataRole.UserRole)
-
-    def _open_selected(self) -> None:
-        path = self._selected_path()
+    def _open_selected(self, *_args) -> None:
+        item = self.analysis_tree.currentItem()
+        path = item.data(0, Qt.ItemDataRole.UserRole) if item else None
         if not path:
             return
-        import os
-
         folder = path if os.path.isdir(path) else os.path.dirname(path)
-        pf.open_with_shell(folder)
+        if not pf.open_with_shell(folder):
+            QMessageBox.information(self, "Could not open", folder)
 
-    def _delete_selected(self) -> None:
-        path = self._selected_path()
-        if not path:
+    # -- volume actions --------------------------------------------------
+    def _optimise(self) -> None:
+        item = self.volumes_tree.currentItem()
+        vol = item.data(0, Qt.ItemDataRole.UserRole) if item else None
+        if vol is None:
+            QMessageBox.information(self, "No drive selected", "Pick a drive in the list first.")
             return
-        import os
-
-        if os.path.isdir(path):
-            QMessageBox.information(self, "Not a file", "Select an individual file to delete.")
-            return
-        answer = QMessageBox.question(self, "Delete file", f"Permanently delete?\n\n{path}")
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        try:
-            os.remove(path)
-            self.log(f"Deleted {path}", "warn")
-            self.status("File deleted")
-        except OSError as exc:
-            QMessageBox.warning(self, "Could not delete", str(exc))
-
-    def _optimise(self, vol: disks.Volume) -> None:
-        is_ssd = str(vol.media).upper() == "SSD"
+        is_ssd = "ssd" in (vol.media or "").lower()
+        verb = "Run TRIM on" if is_ssd else "Defragment"
         answer = QMessageBox.question(
             self,
             "Optimise drive",
-            f"{'TRIM' if is_ssd else 'Defragment'} {vol.drive}?\n\n"
-            "This can take a while on large mechanical drives.",
+            f"{verb} {vol.drive}?\n\nThis can take a while and runs in the background.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
         self.progress.start(f"Optimising {vol.drive}…")
-        worker = submit(self._do_optimise, vol.drive, is_ssd)
-        worker.signals.result.connect(self._on_optimise)
-        worker.signals.error.connect(self._on_error)
+        worker = submit(disks.optimize, vol.drive, is_ssd)
+        worker.signals.result.connect(self._on_optimised)
+        worker.signals.error.connect(self._on_failed)
 
-    def _do_optimise(self, drive, is_ssd):
-        return disks.optimize(drive, is_ssd)
-
-    def _on_optimise(self, payload) -> None:
+    def _on_optimised(self, payload) -> None:
         ok, detail = payload
-        self.progress.stop("done")
-        self.log(("Drive optimised" if ok else "Optimisation failed") + (f": {detail}" if detail else ""),
-                 "ok" if ok else "error")
+        self.progress.stop("Optimisation finished" if ok else "Optimisation failed")
+        self.log(detail or ("Drive optimised" if ok else "Drive optimisation failed"), "ok" if ok else "error")
 
-    def _on_error(self, message: str) -> None:
-        self.progress.stop("failed")
-        self.log(message, "error")
+    # -- plumbing --------------------------------------------------------
+    def _cancel(self) -> None:
+        if self._worker is not None:
+            self._worker.cancel()
+            self.progress.stop("Cancelled")
+            self._set_busy(False)
 
-
-def _color(value: str):
-    from PySide6.QtGui import QColor
-
-    return QColor(value)
+    def _set_busy(self, busy: bool) -> None:
+        for button in (self.btn_folders, self.btn_large, self.btn_dups, self.btn_browse):
+            button.setEnabled(not busy)

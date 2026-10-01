@@ -1,217 +1,211 @@
-"""Uninstaller / bloatware remover page."""
+"""Uninstaller: installed programs and Store apps, with bloatware detection."""
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QTreeWidget,
     QTreeWidgetItem,
 )
 
-from ...core.format import human_size
 from ...core.workers import submit
 from ...modules import apps
 from ..context import AppContext
-from ..icons import icon
-from ..widgets import LogConsole, ProgressRow, SearchField, StatCard
+from ..widgets import LogConsole, ProgressRow
 from .base import Page
 
 
 class AppsPage(Page):
     key = "apps"
     title = "Uninstaller"
-    subtitle = "Remove pre-installed bloatware and ordinary programs — including Store apps Programs & Features hides."
-    icon_name = "box"
+    subtitle = "Everything installed on this PC, including Store apps. Flagged rows are common bloatware."
 
     def __init__(self, ctx: AppContext):
         super().__init__(ctx)
         self.entries: list[apps.App] = []
-        self._build()
 
-    def _build(self) -> None:
-        layout = self.content_layout
-
-        header = QHBoxLayout()
-        heading = QLabel("Uninstaller")
-        font = QFont()
-        font.setPointSize(18)
-        font.setWeight(QFont.Weight.Bold)
-        heading.setFont(font)
-        header.addWidget(heading)
-        header.addStretch(1)
-        self.btn_refresh = QPushButton(" Refresh list")
-        self.btn_refresh.setIcon(icon("refresh", self.ctx.accent, 16))
-        self.btn_refresh.clicked.connect(self.refresh)
-        header.addWidget(self.btn_refresh)
-        layout.addLayout(header)
-
-        sub = QLabel(self.subtitle)
-        sub.setProperty("muted", True)
-        sub.setWordWrap(True)
-        layout.addWidget(sub)
-
-        stats = QHBoxLayout()
-        stats.setSpacing(10)
-        self.stat_total = StatCard("Installed", "—", "", "box")
-        self.stat_bloat = StatCard("Bloatware found", "—", "", "warning")
-        self.stat_size = StatCard("Total size", "—", "where reported", "drive")
-        stats.addWidget(self.stat_total)
-        stats.addWidget(self.stat_bloat)
-        stats.addWidget(self.stat_size)
-        layout.addLayout(stats)
-
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(8)
-        self.search = SearchField("Search applications…")
+        filters = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search by name or publisher…")
+        self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._apply_filter)
-        toolbar.addWidget(self.search)
-        self.chk_bloat = QCheckBox("Show only suggested removals")
-        self.chk_bloat.stateChanged.connect(self._apply_filter)
-        toolbar.addWidget(self.chk_bloat)
-        toolbar.addStretch(1)
-        self.btn_select_bloat = QPushButton("Select suggested")
-        self.btn_select_bloat.clicked.connect(self._select_bloat)
-        self.btn_uninstall = QPushButton(" Uninstall selected")
-        self.btn_uninstall.setIcon(icon("trash", self.ctx.accent, 16))
-        self.btn_uninstall.setProperty("danger", True)
-        self.btn_uninstall.clicked.connect(self._uninstall)
-        toolbar.addWidget(self.btn_select_bloat)
-        toolbar.addWidget(self.btn_uninstall)
-        layout.addLayout(toolbar)
+        filters.addWidget(self.search, 1)
+
+        self.only_bloat = QCheckBox("Only bloatware")
+        self.only_bloat.toggled.connect(self._apply_filter)
+        filters.addWidget(self.only_bloat)
+        self.layout_.addLayout(filters)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Application", "Version", "Publisher", "Size", "Source", "Installed"])
-        self.tree.setAlternatingRowColors(True)
-        self.tree.setColumnWidth(0, 300)
-        self.tree.setColumnWidth(1, 110)
-        self.tree.setColumnWidth(2, 190)
-        self.tree.setColumnWidth(3, 80)
-        self.tree.setColumnWidth(4, 70)
-        self.tree.setMinimumHeight(280)
+        self.tree.setColumnCount(6)
+        self.tree.setHeaderLabels(["Name", "Version", "Publisher", "Size", "Source", "Note"])
         self.tree.setRootIsDecorated(False)
-        self.tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
-        layout.addWidget(self.tree, 1)
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setUniformRowHeights(True)
+        self.tree.setSortingEnabled(True)
+        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.tree.itemChanged.connect(lambda *_: self._update_summary())
+        self.layout_.addWidget(self.tree, 1)
 
         self.progress = ProgressRow()
-        layout.addWidget(self.progress)
+        self.layout_.addWidget(self.progress)
 
-        self.console = LogConsole(placeholder="Uninstall output appears here…")
-        self.console.setFixedHeight(150)
-        layout.addWidget(self.console)
+        self.console = LogConsole("Uninstall output appears here.")
+        self.console.setMaximumHeight(110)
+        self.layout_.addWidget(self.console)
+
+        buttons = QHBoxLayout()
+        self.btn_refresh = QPushButton("Refresh")
+        self.btn_refresh.clicked.connect(self.refresh)
+        buttons.addWidget(self.btn_refresh)
+
+        self.btn_select_bloat = QPushButton("Select bloatware")
+        self.btn_select_bloat.clicked.connect(self._select_bloat)
+        buttons.addWidget(self.btn_select_bloat)
+
+        self.btn_none = QPushButton("Select none")
+        self.btn_none.clicked.connect(lambda: self._set_all(False))
+        buttons.addWidget(self.btn_none)
+
+        buttons.addStretch(1)
+        self.summary = QLabel("0 selected")
+        buttons.addWidget(self.summary)
+
+        self.btn_uninstall = QPushButton("Uninstall selected")
+        self.btn_uninstall.clicked.connect(self._uninstall)
+        buttons.addWidget(self.btn_uninstall)
+        self.layout_.addLayout(buttons)
 
     # -- data ------------------------------------------------------------
     def refresh(self) -> None:
-        self.progress.start("Reading installed applications…")
+        self._set_busy(True)
+        self.progress.start("Reading installed programs…")
         worker = submit(self._load)
-        worker.signals.progress.connect(lambda d, t, m: self.progress.set(d, t, m or "Loading…"))
+        worker.signals.progress.connect(lambda d, t, m: self.progress.set(d, t, m))
         worker.signals.result.connect(self._on_loaded)
-        worker.signals.error.connect(self._on_error)
+        worker.signals.error.connect(self._on_failed)
 
     def _load(self, progress=None):
         return apps.installed_apps(progress=progress)
 
-    def _on_loaded(self, entries) -> None:
+    def _on_loaded(self, entries: list) -> None:
+        self._set_busy(False)
         self.entries = entries
-        self._populate()
-        bloat = [a for a in entries if apps.is_bloat_app(a)[0]]
-        total_bytes = sum(a.size_mb for a in entries) * 1024 * 1024
-        self.stat_total.set_value(str(len(entries)), f"{len(entries)} apps detected")
-        self.stat_bloat.set_value(str(len(bloat)), "suggested for removal")
-        self.stat_size.set_value(human_size(total_bytes), "reported by installers")
-        self.progress.stop(f"{len(entries)} applications")
-        self.status(f"{len(entries)} applications, {len(bloat)} suggested removals")
+        bloat = sum(1 for a in entries if apps.is_bloat_app(a)[0])
+        self.progress.stop(f"{len(entries)} programs, {bloat} flagged as bloatware")
 
-    def _populate(self) -> None:
+        self.tree.setSortingEnabled(False)
+        self.tree.blockSignals(True)
         self.tree.clear()
-        for app in self.entries:
+        for app in entries:
             is_bloat, reason = apps.is_bloat_app(app)
-            row = QTreeWidgetItem(
-                [
-                    app.name + ("  • suggested" if is_bloat else ""),
-                    app.version,
-                    app.publisher,
-                    app.size_text,
-                    app.source,
-                    app.installed,
-                ]
+            item = QTreeWidgetItem(
+                [app.name, app.version, app.publisher, app.size_text, app.source,
+                 reason if is_bloat else ""]
             )
-            row.setData(0, Qt.ItemDataRole.UserRole, app.name)
-            row.setFlags(row.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            row.setCheckState(0, Qt.CheckState.Unchecked)
-            if is_bloat:
-                row.setForeground(0, QColor("#f5c451"))
-                row.setToolTip(0, reason)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(0, Qt.CheckState.Unchecked)
+            item.setData(0, Qt.ItemDataRole.UserRole, app)
+            item.setData(1, Qt.ItemDataRole.UserRole, is_bloat)
             if not app.removable:
-                row.setText(4, app.source + " (protected)")
-            self.tree.addTopLevelItem(row)
+                item.setDisabled(True)
+                item.setToolTip(0, "This entry cannot be uninstalled from here")
+            self.tree.addTopLevelItem(item)
+        self.tree.blockSignals(True)
+        self.tree.setSortingEnabled(True)
+        self.tree.blockSignals(False)
+        self.tree.resizeColumnToContents(1)
+        self.tree.resizeColumnToContents(3)
+        self._apply_filter()
+        self._update_summary()
+
+    def _on_failed(self, message: str) -> None:
+        self._set_busy(False)
+        self.progress.stop("Could not list installed programs")
+        self.on_error(message)
+
+    # -- selection -------------------------------------------------------
+    def _rows(self):
+        for i in range(self.tree.topLevelItemCount()):
+            yield self.tree.topLevelItem(i)
+
+    def _selected_apps(self) -> list[apps.App]:
+        return [
+            row.data(0, Qt.ItemDataRole.UserRole)
+            for row in self._rows()
+            if row.checkState(0) == Qt.CheckState.Checked
+        ]
+
+    def _set_all(self, checked: bool) -> None:
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        for row in self._rows():
+            if not row.isHidden() and not row.isDisabled():
+                row.setCheckState(0, state)
+
+    def _select_bloat(self) -> None:
+        for row in self._rows():
+            is_bloat = bool(row.data(1, Qt.ItemDataRole.UserRole))
+            row.setCheckState(
+                0, Qt.CheckState.Checked if is_bloat and not row.isDisabled() else Qt.CheckState.Unchecked
+            )
+
+    def _update_summary(self) -> None:
+        self.summary.setText(f"{len(self._selected_apps())} selected")
 
     def _apply_filter(self, *_args) -> None:
         needle = self.search.text().strip().lower()
-        only_bloat = self.chk_bloat.isChecked()
-        for i in range(self.tree.topLevelItemCount()):
-            row = self.tree.topLevelItem(i)
-            name = (row.data(0, Qt.ItemDataRole.UserRole) or "").lower()
-            is_bloat = apps.is_bloat(row.data(0, Qt.ItemDataRole.UserRole) or "")[0]
-            show = (not needle or needle in name or needle in row.text(2).lower())
-            if show and only_bloat and not is_bloat:
-                show = False
-            row.setHidden(not show)
+        bloat_only = self.only_bloat.isChecked()
+        for row in self._rows():
+            text = f"{row.text(0)} {row.text(2)}".lower()
+            visible = (not needle or needle in text) and (
+                not bloat_only or bool(row.data(1, Qt.ItemDataRole.UserRole))
+            )
+            row.setHidden(not visible)
 
-    def _selected_apps(self) -> list[apps.App]:
-        names = set()
-        for i in range(self.tree.topLevelItemCount()):
-            row = self.tree.topLevelItem(i)
-            if row.checkState(0) == Qt.CheckState.Checked:
-                names.add(row.data(0, Qt.ItemDataRole.UserRole))
-        return [a for a in self.entries if a.name in names]
-
-    def _select_bloat(self) -> None:
-        for i in range(self.tree.topLevelItemCount()):
-            row = self.tree.topLevelItem(i)
-            name = row.data(0, Qt.ItemDataRole.UserRole)
-            if apps.is_bloat(name or "")[0]:
-                row.setCheckState(0, Qt.CheckState.Checked)
-
+    # -- uninstall -------------------------------------------------------
     def _uninstall(self) -> None:
         selected = self._selected_apps()
         if not selected:
+            QMessageBox.information(self, "Nothing selected", "Tick the programs you want to remove.")
             return
+        names = "\n".join(f"  • {a.name}" for a in selected[:12])
+        more = f"\n  … and {len(selected) - 12} more" if len(selected) > 12 else ""
         answer = QMessageBox.question(
             self,
-            "Confirm uninstall",
-            f"Remove {len(selected)} application(s)?\n\n"
-            + "\n".join(f" • {a.name}" for a in selected[:12])
-            + ("\n …" if len(selected) > 12 else "")
-            + "\n\nStore apps are removed for all users where possible. This cannot be undone.",
+            "Uninstall programs",
+            f"Uninstall {len(selected)} program(s)?\n\n{names}{more}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
 
-        self.btn_uninstall.setEnabled(False)
-        self.progress.start(f"Removing {len(selected)} application(s)…")
+        self._set_busy(True)
+        self.progress.start("Uninstalling…")
         worker = submit(self._do_uninstall, selected)
-        worker.signals.message.connect(lambda m: self.log(m))
-        worker.signals.result.connect(self._on_uninstall_done)
-        worker.signals.error.connect(self._on_error)
+        worker.signals.message.connect(lambda m: self.console.append(m))
+        worker.signals.result.connect(self._on_uninstalled)
+        worker.signals.error.connect(self._on_failed)
 
     def _do_uninstall(self, selected, emit=None):
         return apps.uninstall_many(selected, emit=emit)
 
-    def _on_uninstall_done(self, payload) -> None:
-        ok_count, total = payload
-        self.btn_uninstall.setEnabled(True)
-        self.progress.stop("uninstall finished")
-        self.log(f"Removed {ok_count}/{total} application(s)", "ok" if ok_count == total else "warn")
-        self.status(f"Removed {ok_count}/{total}")
+    def _on_uninstalled(self, payload) -> None:
+        self._set_busy(False)
+        done, failed = payload
+        message = f"Uninstalled {done} program(s)" + (f", {failed} failed" if failed else "")
+        self.progress.stop(message)
+        self.log(message, "ok" if not failed else "warn")
+        self.status(message)
         self.refresh()
 
-    def _on_error(self, message: str) -> None:
-        self.btn_uninstall.setEnabled(True)
-        self.progress.stop("failed")
-        self.log(message, "error")
+    def _set_busy(self, busy: bool) -> None:
+        for button in (self.btn_refresh, self.btn_uninstall, self.btn_select_bloat, self.btn_none):
+            button.setEnabled(not busy)

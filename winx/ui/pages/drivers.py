@@ -1,16 +1,16 @@
-"""Drivers page: inventory, problem devices, backups and the driver store."""
+"""Drivers: what is installed, what is broken, and the driver store."""
 
 from __future__ import annotations
 
-import datetime as dt
 import os
 
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
     QHBoxLayout,
-    QLabel,
+    QHeaderView,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QTabWidget,
@@ -23,252 +23,183 @@ from PySide6.QtWidgets import (
 from ...core.workers import submit
 from ...modules import drivers
 from ..context import AppContext
-from ..icons import icon
-from ..widgets import LogConsole, ProgressRow, StatCard
+from ..widgets import ProgressRow
 from .base import Page
 
 
 class DriversPage(Page):
     key = "drivers"
     title = "Drivers"
-    subtitle = "Every installed driver, devices that are not working, and a one-click backup before you touch anything."
-    icon_name = "chip"
+    subtitle = "Installed drivers, devices reporting problems, and third-party packages in the driver store."
 
     def __init__(self, ctx: AppContext):
         super().__init__(ctx)
-        self._build()
 
-    def _build(self) -> None:
-        layout = self.content_layout
-        header = QHBoxLayout()
-        heading = QLabel("Drivers")
-        font = QFont()
-        font.setPointSize(18)
-        font.setWeight(QFont.Weight.Bold)
-        heading.setFont(font)
-        header.addWidget(heading)
-        header.addStretch(1)
-        self.btn_backup = QPushButton(" Back up all drivers")
-        self.btn_backup.setIcon(icon("save", self.ctx.accent, 16))
-        self.btn_backup.clicked.connect(self._backup)
-        self.btn_scan = QPushButton("Rescan hardware")
-        self.btn_scan.clicked.connect(self._rescan)
-        self.btn_refresh = QPushButton(" Refresh")
-        self.btn_refresh.setIcon(icon("refresh", self.ctx.accent, 16))
-        self.btn_refresh.clicked.connect(self.refresh)
-        header.addWidget(self.btn_backup)
-        header.addWidget(self.btn_scan)
-        header.addWidget(self.btn_refresh)
-        layout.addLayout(header)
-
-        sub = QLabel(self.subtitle)
-        sub.setProperty("muted", True)
-        sub.setWordWrap(True)
-        layout.addWidget(sub)
-
-        stats = QHBoxLayout()
-        stats.setSpacing(10)
-        self.stat_total = StatCard("Drivers", "—", "", "chip")
-        self.stat_problems = StatCard("Problem devices", "—", "", "warning")
-        self.stat_unsigned = StatCard("Unsigned", "—", "", "security")
-        self.stat_old = StatCard("Older than 2 years", "—", "", "clock")
-        stats.addWidget(self.stat_total)
-        stats.addWidget(self.stat_problems)
-        stats.addWidget(self.stat_unsigned)
-        stats.addWidget(self.stat_old)
-        layout.addLayout(stats)
+        filters = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search drivers…")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._apply_filter)
+        filters.addWidget(self.search, 1)
+        self.only_problems = QCheckBox("Only problem devices")
+        self.only_problems.toggled.connect(self._apply_filter)
+        filters.addWidget(self.only_problems)
+        self.layout_.addLayout(filters)
 
         self.tabs = QTabWidget()
-        layout.addWidget(self.tabs, 1)
+        self.layout_.addWidget(self.tabs, 1)
 
-        # inventory
-        tab = QWidget()
-        tl = QVBoxLayout(tab)
-        bar = QHBoxLayout()
-        self.search = QLabel()
-        self.chk_problems = QCheckBox("Show only devices with problems")
-        self.chk_problems.stateChanged.connect(self._apply_filter)
-        self.chk_unsigned = QCheckBox("Show only unsigned drivers")
-        self.chk_unsigned.stateChanged.connect(self._apply_filter)
-        bar.addWidget(self.chk_problems)
-        bar.addWidget(self.chk_unsigned)
-        bar.addStretch(1)
-        tl.addLayout(bar)
+        installed = QWidget()
+        installed_layout = QVBoxLayout(installed)
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Device", "Provider", "Version", "Date", "Class", "INF", "Status"])
-        self.tree.setColumnWidth(0, 280)
-        self.tree.setColumnWidth(1, 170)
-        self.tree.setColumnWidth(2, 140)
-        self.tree.setColumnWidth(3, 100)
-        self.tree.setColumnWidth(5, 110)
+        self.tree.setColumnCount(6)
+        self.tree.setHeaderLabels(["Device", "Class", "Provider", "Version", "Date", "Status"])
         self.tree.setRootIsDecorated(False)
         self.tree.setAlternatingRowColors(True)
-        self.tree.setMinimumHeight(260)
-        tl.addWidget(self.tree, 1)
-        self.tabs.addTab(tab, "Installed drivers")
+        self.tree.setUniformRowHeights(True)
+        self.tree.setSortingEnabled(True)
+        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        installed_layout.addWidget(self.tree, 1)
+        self.tabs.addTab(installed, "Installed drivers")
 
-        # store
-        store_tab = QWidget()
-        sl = QVBoxLayout(store_tab)
-        info = QLabel(
-            "The driver store holds every driver package Windows has ever installed. Removing one uninstalls it "
-            "from all devices. Back up before you touch this."
-        )
-        info.setProperty("muted", True)
-        info.setWordWrap(True)
-        sl.addWidget(info)
+        store = QWidget()
+        store_layout = QVBoxLayout(store)
         self.store_tree = QTreeWidget()
-        self.store_tree.setHeaderLabels(["Published name", "Original name", "Provider", "Class", "Version"])
-        self.store_tree.setColumnWidth(0, 160)
-        self.store_tree.setColumnWidth(1, 170)
-        self.store_tree.setColumnWidth(2, 200)
+        self.store_tree.setColumnCount(6)
+        self.store_tree.setHeaderLabels(
+            ["Published name", "Original name", "Provider", "Class", "Version", "Date"]
+        )
         self.store_tree.setRootIsDecorated(False)
         self.store_tree.setAlternatingRowColors(True)
-        self.store_tree.setMinimumHeight(220)
-        sl.addWidget(self.store_tree, 1)
-        sbar = QHBoxLayout()
-        self.btn_store_refresh = QPushButton("Refresh driver store")
-        self.btn_store_refresh.clicked.connect(self._load_store)
-        self.btn_store_delete = QPushButton("Remove selected package")
-        self.btn_store_delete.setProperty("danger", True)
-        self.btn_store_delete.clicked.connect(self._delete_store)
-        sbar.addWidget(self.btn_store_refresh)
-        sbar.addWidget(self.btn_store_delete)
-        sbar.addStretch(1)
-        sl.addLayout(sbar)
-        self.tabs.addTab(store_tab, "Driver store")
+        self.store_tree.setSortingEnabled(True)
+        self.store_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        store_layout.addWidget(self.store_tree, 1)
+
+        store_buttons = QHBoxLayout()
+        self.btn_remove = QPushButton("Remove package…")
+        self.btn_remove.clicked.connect(self._remove_store_driver)
+        store_buttons.addWidget(self.btn_remove)
+        store_buttons.addStretch(1)
+        store_layout.addLayout(store_buttons)
+        self.tabs.addTab(store, "Driver store")
 
         self.progress = ProgressRow()
-        layout.addWidget(self.progress)
-        self.console = LogConsole(placeholder="Driver operations are logged here…")
-        self.console.setFixedHeight(110)
-        layout.addWidget(self.console)
+        self.layout_.addWidget(self.progress)
+
+        buttons = QHBoxLayout()
+        self.btn_refresh = QPushButton("Refresh")
+        self.btn_refresh.clicked.connect(self.refresh)
+        buttons.addWidget(self.btn_refresh)
+        self.btn_backup = QPushButton("Back up all drivers…")
+        self.btn_backup.clicked.connect(self._backup)
+        buttons.addWidget(self.btn_backup)
+        self.btn_scan = QPushButton("Scan for hardware changes")
+        self.btn_scan.clicked.connect(self._scan_hardware)
+        buttons.addWidget(self.btn_scan)
+        buttons.addStretch(1)
+        self.layout_.addLayout(buttons)
 
     # -- data ------------------------------------------------------------
     def refresh(self) -> None:
-        self.progress.start("Enumerating drivers…")
+        self.btn_refresh.setEnabled(False)
+        self.progress.start("Reading drivers…")
         worker = submit(self._load)
-        worker.signals.progress.connect(lambda d, t, m: self.progress.set(d, t, m or "Enumerating…"))
+        worker.signals.progress.connect(lambda d, t, m: self.progress.set(d, t, m))
         worker.signals.result.connect(self._on_loaded)
-        worker.signals.error.connect(self._on_error)
+        worker.signals.error.connect(self._on_failed)
 
     def _load(self, progress=None):
-        return drivers.list_drivers(progress=progress)
+        return (drivers.list_drivers(progress=progress), drivers.driver_store())
 
-    def _on_loaded(self, rows) -> None:
-        self.rows = rows
+    def _on_loaded(self, payload) -> None:
+        self.btn_refresh.setEnabled(True)
+        installed, store = payload
+        self.progress.stop(f"{len(installed)} drivers, {len(store)} third-party packages")
+
+        self.tree.setSortingEnabled(False)
         self.tree.clear()
-        problems = 0
-        unsigned = 0
-        old = 0
-        cutoff = dt.date.today() - dt.timedelta(days=730)
-        for drv in rows:
+        for driver in installed:
             item = QTreeWidgetItem(
-                [drv.name, drv.provider, drv.version, drv.date, drv.device_class, drv.inf, drv.status]
+                [driver.name, driver.device_class, driver.provider, driver.version, driver.date, driver.status]
             )
-            if drv.is_problem:
-                item.setForeground(6, QColor("#ff6b6b"))
-                item.setForeground(0, QColor("#ff6b6b"))
-                problems += 1
-            if not drv.signed:
-                item.setForeground(2, QColor("#f5c451"))
-                unsigned += 1
-            try:
-                if drv.date and dt.date.fromisoformat(drv.date) < cutoff:
-                    old += 1
-            except ValueError:
-                pass
+            item.setData(0, Qt.ItemDataRole.UserRole, driver.is_problem)
+            if not driver.signed:
+                item.setToolTip(0, "Unsigned driver")
             self.tree.addTopLevelItem(item)
+        self.tree.setSortingEnabled(True)
+        self.tree.resizeColumnToContents(1)
 
-        self.stat_total.set_value(str(len(rows)), "installed drivers")
-        self.stat_problems.set_value(str(problems), "not working correctly" if problems else "all devices OK")
-        self.stat_unsigned.set_value(str(unsigned), "unsigned packages")
-        self.stat_old.set_value(str(old), "consider updating")
-        self.progress.stop(f"{len(rows)} drivers, {problems} problem(s)")
-        self.status(f"{len(rows)} drivers, {problems} with problems")
+        self.store_tree.setSortingEnabled(False)
+        self.store_tree.clear()
+        for pkg in store:
+            item = QTreeWidgetItem(
+                [pkg.published, pkg.original, pkg.provider, pkg.class_name, pkg.version, pkg.date]
+            )
+            item.setData(0, Qt.ItemDataRole.UserRole, pkg.published)
+            self.store_tree.addTopLevelItem(item)
+        self.store_tree.setSortingEnabled(True)
+        self.store_tree.resizeColumnToContents(0)
+
         self._apply_filter()
 
+    def _on_failed(self, message: str) -> None:
+        self.btn_refresh.setEnabled(True)
+        self.progress.stop("Could not read drivers")
+        self.on_error(message)
+
     def _apply_filter(self, *_args) -> None:
-        problems_only = self.chk_problems.isChecked()
-        unsigned_only = self.chk_unsigned.isChecked()
+        needle = self.search.text().strip().lower()
+        problems_only = self.only_problems.isChecked()
         for i in range(self.tree.topLevelItemCount()):
-            item = self.tree.topLevelItem(i)
-            is_problem = item.foreground(6).color() == QColor("#ff6b6b")
-            is_unsigned = item.foreground(2).color() == QColor("#f5c451")
-            hidden = (problems_only and not is_problem) or (unsigned_only and not is_unsigned)
-            item.setHidden(hidden)
-
-    # -- store -----------------------------------------------------------
-    def _load_store(self) -> None:
-        self.progress.start("Reading driver store…")
-        worker = submit(self._store)
-        worker.signals.result.connect(self._on_store)
-        worker.signals.error.connect(self._on_error)
-
-    def _store(self):
-        return drivers.driver_store()
-
-    def _on_store(self, rows) -> None:
-        self.progress.stop(f"{len(rows)} packages")
-        self.store_tree.clear()
-        for drv in rows:
-            self.store_tree.addTopLevelItem(
-                QTreeWidgetItem([drv.published, drv.original, drv.provider, drv.class_name, drv.version])
+            row = self.tree.topLevelItem(i)
+            text = " ".join(row.text(c) for c in range(row.columnCount())).lower()
+            visible = (not needle or needle in text) and (
+                not problems_only or bool(row.data(0, Qt.ItemDataRole.UserRole))
             )
+            row.setHidden(not visible)
 
-    def _delete_store(self) -> None:
-        items = self.store_tree.selectedItems()
-        if not items:
+    # -- actions ---------------------------------------------------------
+    def _backup(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, "Choose a folder for the driver backup", os.path.expanduser("~")
+        )
+        if not folder:
             return
-        published = items[0].text(0)
-        answer = QMessageBox.warning(
+        self.progress.start("Backing up drivers…")
+        worker = submit(drivers.backup_drivers, folder)
+        worker.signals.result.connect(lambda payload: self._on_simple(payload, "Driver backup"))
+        worker.signals.error.connect(self._on_failed)
+
+    def _scan_hardware(self) -> None:
+        self.progress.start("Scanning for hardware changes…")
+        worker = submit(drivers.scan_hardware_changes)
+        worker.signals.result.connect(lambda payload: self._on_simple(payload, "Hardware scan"))
+        worker.signals.error.connect(self._on_failed)
+
+    def _remove_store_driver(self) -> None:
+        item = self.store_tree.currentItem()
+        published = item.data(0, Qt.ItemDataRole.UserRole) if item else None
+        if not published:
+            QMessageBox.information(self, "No package selected", "Pick a package in the list first.")
+            return
+        answer = QMessageBox.question(
             self,
             "Remove driver package",
-            f"Remove and uninstall {published}?\n\nIf this is your graphics, network or storage driver you could "
-            "lose display or connectivity until you reinstall it.",
+            f"Remove {published} from the driver store?\n\n"
+            "Windows will fall back to another driver for that device.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
         ok, detail = drivers.remove_store_driver(published)
-        self.log((f"Removed {published}" if ok else f"Failed: {detail}"), "ok" if ok else "error")
-        self._load_store()
+        self._on_simple((ok, detail), "Remove package")
+        if ok:
+            self.refresh()
 
-    # -- actions ---------------------------------------------------------
-    def _backup(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Choose a backup folder", os.path.expanduser("~"))
-        if not folder:
-            return
-        folder = os.path.join(folder, f"DriverBackup-{dt.date.today():%Y%m%d}")
-        self.progress.start("Exporting drivers…")
-        worker = submit(self._do_backup, folder)
-        worker.signals.result.connect(self._on_backup)
-        worker.signals.error.connect(self._on_error)
-
-    def _do_backup(self, folder):
-        return drivers.backup_drivers(folder)
-
-    def _on_backup(self, payload) -> None:
+    def _on_simple(self, payload, title: str) -> None:
         ok, detail = payload
-        self.progress.stop("done")
-        self.log(("Drivers exported" if ok else "Export failed") + f": {detail}", "ok" if ok else "error")
-        QMessageBox.information(self, "Driver backup", detail if ok else "Failed: " + detail)
-
-    def _rescan(self) -> None:
-        self.progress.start("Scanning for hardware changes…")
-        worker = submit(self._do_rescan)
-        worker.signals.result.connect(self._on_rescan)
-        worker.signals.error.connect(self._on_error)
-
-    def _do_rescan(self):
-        return drivers.scan_hardware_changes()
-
-    def _on_rescan(self, payload) -> None:
-        ok, detail = payload
-        self.progress.stop("done")
-        self.log(("Hardware rescan complete" if ok else "Rescan failed") + f": {detail}", "ok" if ok else "error")
-        self.refresh()
-
-    def _on_error(self, message: str) -> None:
-        self.progress.stop("failed")
-        self.log(message, "error")
+        message = f"{title}: {detail}" if detail else f"{title} {'finished' if ok else 'failed'}"
+        self.progress.stop(message)
+        self.log(message, "ok" if ok else "error")
+        self.status(message)

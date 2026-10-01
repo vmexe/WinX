@@ -1,288 +1,225 @@
-"""Startup manager page: logon programs, startup folders, tasks and services."""
+"""Startup manager: logon programs, startup folders, scheduled tasks, services."""
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QColor
 from PySide6.QtWidgets import (
-    QComboBox,
     QHBoxLayout,
+    QHeaderView,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
     QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
-    QVBoxLayout,
     QWidget,
+    QVBoxLayout,
 )
 
 from ...core.workers import submit
 from ...modules import startup
 from ..context import AppContext
-from ..icons import icon
-from ..widgets import LogConsole, ProgressRow, StatCard
+from ..widgets import ProgressRow
 from .base import Page
 
-_IMPACT_COLOR = {"High": "#ff6b6b", "Medium": "#f5c451", "Low": "#3ecf8e"}
+SERVICE_STARTS = ["auto", "delayed-auto", "demand", "disabled"]
 
 
 class StartupPage(Page):
     key = "startup"
     title = "Startup"
-    subtitle = "Everything that launches when Windows starts. Disabling an entry is reversible — deleting is not."
-    icon_name = "power"
+    subtitle = "Programs and services that launch themselves when Windows starts."
 
     def __init__(self, ctx: AppContext):
         super().__init__(ctx)
         self.items: list[startup.StartupItem] = []
-        self._build()
-
-    def _build(self) -> None:
-        layout = self.content_layout
-        header = QHBoxLayout()
-        heading = QLabel("Startup")
-        font = QFont()
-        font.setPointSize(18)
-        font.setWeight(QFont.Weight.Bold)
-        heading.setFont(font)
-        header.addWidget(heading)
-        header.addStretch(1)
-        self.btn_refresh = QPushButton(" Refresh")
-        self.btn_refresh.setIcon(icon("refresh", self.ctx.accent, 16))
-        self.btn_refresh.clicked.connect(self.refresh)
-        header.addWidget(self.btn_refresh)
-        layout.addLayout(header)
-
-        sub = QLabel(self.subtitle)
-        sub.setProperty("muted", True)
-        sub.setWordWrap(True)
-        layout.addWidget(sub)
-
-        stats = QHBoxLayout()
-        stats.setSpacing(10)
-        self.stat_total = StatCard("Startup entries", "—", "", "power")
-        self.stat_enabled = StatCard("Enabled", "—", "", "check")
-        self.stat_heavy = StatCard("High impact", "—", "", "warning")
-        self.stat_services = StatCard("Auto services", "—", "", "sliders")
-        stats.addWidget(self.stat_total)
-        stats.addWidget(self.stat_enabled)
-        stats.addWidget(self.stat_heavy)
-        stats.addWidget(self.stat_services)
-        layout.addLayout(stats)
 
         self.tabs = QTabWidget()
-        layout.addWidget(self.tabs, 1)
+        self.layout_.addWidget(self.tabs, 1)
 
-        # --- tab 1: logon entries ---------------------------------------
-        tab = QWidget()
-        tl = QVBoxLayout(tab)
-        tl.setSpacing(8)
-
-        bar = QHBoxLayout()
-        self.btn_disable = QPushButton("Disable selected")
-        self.btn_enable = QPushButton("Enable selected")
-        self.btn_delete = QPushButton("Delete selected")
-        self.btn_delete.setProperty("danger", True)
-        self.btn_disable.clicked.connect(lambda: self._set_enabled(False))
-        self.btn_enable.clicked.connect(lambda: self._set_enabled(True))
-        self.btn_delete.clicked.connect(self._delete_selected)
-        bar.addWidget(self.btn_disable)
-        bar.addWidget(self.btn_enable)
-        bar.addWidget(self.btn_delete)
-        bar.addStretch(1)
-        tl.addLayout(bar)
-
+        # -- startup entries ---------------------------------------------
+        entries = QWidget()
+        entries_layout = QVBoxLayout(entries)
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Name", "Type", "Location", "Impact", "Command"])
-        self.tree.setAlternatingRowColors(True)
-        self.tree.setColumnWidth(0, 210)
-        self.tree.setColumnWidth(1, 90)
-        self.tree.setColumnWidth(2, 230)
-        self.tree.setColumnWidth(3, 80)
-        self.tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
+        self.tree.setColumnCount(5)
+        self.tree.setHeaderLabels(["Program", "Status", "Impact", "Type", "Location"])
         self.tree.setRootIsDecorated(False)
-        self.tree.setMinimumHeight(240)
-        tl.addWidget(self.tree, 1)
-        self.tabs.addTab(tab, "Startup programs")
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setUniformRowHeights(True)
+        self.tree.setSortingEnabled(True)
+        self.tree.header().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.tree.currentItemChanged.connect(self._show_command)
+        entries_layout.addWidget(self.tree, 1)
 
-        # --- tab 2: services --------------------------------------------
-        services_tab = QWidget()
-        sl = QVBoxLayout(services_tab)
-        sl.setSpacing(8)
-        info = QLabel(
-            "Services that start automatically with Windows. Set one to Manual if you do not need it — "
-            "Disabled should be reserved for things you are sure about."
-        )
-        info.setProperty("muted", True)
-        info.setWordWrap(True)
-        sl.addWidget(info)
+        self.command_label = QLabel("")
+        self.command_label.setWordWrap(True)
+        self.command_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        entries_layout.addWidget(self.command_label)
 
+        entry_buttons = QHBoxLayout()
+        self.btn_disable = QPushButton("Disable")
+        self.btn_disable.clicked.connect(lambda: self._set_enabled(False))
+        entry_buttons.addWidget(self.btn_disable)
+        self.btn_enable = QPushButton("Enable")
+        self.btn_enable.clicked.connect(lambda: self._set_enabled(True))
+        entry_buttons.addWidget(self.btn_enable)
+        self.btn_remove = QPushButton("Remove…")
+        self.btn_remove.clicked.connect(self._remove)
+        entry_buttons.addWidget(self.btn_remove)
+        entry_buttons.addStretch(1)
+        entries_layout.addLayout(entry_buttons)
+        self.tabs.addTab(entries, "Startup programs")
+
+        # -- services -----------------------------------------------------
+        services = QWidget()
+        services_layout = QVBoxLayout(services)
         self.services_tree = QTreeWidget()
-        self.services_tree.setHeaderLabels(["Service", "Description", "Status", "Start type", "Change to"])
-        self.services_tree.setAlternatingRowColors(True)
-        self.services_tree.setColumnWidth(0, 230)
-        self.services_tree.setColumnWidth(1, 200)
-        self.services_tree.setColumnWidth(2, 90)
-        self.services_tree.setColumnWidth(3, 110)
+        self.services_tree.setColumnCount(4)
+        self.services_tree.setHeaderLabels(["Service", "Display name", "Start", "State"])
         self.services_tree.setRootIsDecorated(False)
-        self.services_tree.setMinimumHeight(240)
-        sl.addWidget(self.services_tree, 1)
-        self.tabs.addTab(services_tab, "Services")
+        self.services_tree.setAlternatingRowColors(True)
+        self.services_tree.setUniformRowHeights(True)
+        self.services_tree.setSortingEnabled(True)
+        self.services_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        services_layout.addWidget(self.services_tree, 1)
+
+        service_buttons = QHBoxLayout()
+        self.btn_start_type = QPushButton("Change start type…")
+        self.btn_start_type.clicked.connect(self._change_start_type)
+        service_buttons.addWidget(self.btn_start_type)
+        service_buttons.addStretch(1)
+        services_layout.addLayout(service_buttons)
+        self.tabs.addTab(services, "Auto-start services")
 
         self.progress = ProgressRow()
-        layout.addWidget(self.progress)
+        self.layout_.addWidget(self.progress)
 
-        self.console = LogConsole(placeholder="Startup changes are logged here…")
-        self.console.setFixedHeight(120)
-        layout.addWidget(self.console)
+        footer = QHBoxLayout()
+        self.btn_refresh = QPushButton("Refresh")
+        self.btn_refresh.clicked.connect(self.refresh)
+        footer.addWidget(self.btn_refresh)
+        footer.addStretch(1)
+        self.summary = QLabel("")
+        footer.addWidget(self.summary)
+        self.layout_.addLayout(footer)
 
     # -- data ------------------------------------------------------------
     def refresh(self) -> None:
-        self.progress.start("Enumerating startup entries…")
+        self.btn_refresh.setEnabled(False)
+        self.progress.start("Reading startup entries…")
         worker = submit(self._load)
-        worker.signals.progress.connect(lambda d, t, m: self.progress.set(d, t, m or "Scanning…"))
+        worker.signals.progress.connect(lambda d, t, m: self.progress.set(d, t, m))
+        worker.signals.message.connect(lambda m: self.log(m))
         worker.signals.result.connect(self._on_loaded)
-        worker.signals.error.connect(self._on_error)
+        worker.signals.error.connect(self._on_failed)
 
     def _load(self, progress=None, emit=None):
         items = startup.enumerate_items(progress=progress, emit=emit)
         return (items, startup.services_rows())
 
     def _on_loaded(self, payload) -> None:
+        self.btn_refresh.setEnabled(True)
         items, services_rows = payload
         self.items = items
-        self._populate(items)
-        self._populate_services(services_rows)
-        enabled = sum(1 for i in items if i.enabled)
-        heavy = sum(1 for i in items if i.enabled and i.impact == "High")
-        self.stat_total.set_value(str(len(items)), f"{len(items)} entries found")
-        self.stat_enabled.set_value(str(enabled), f"{enabled} launch at logon")
-        self.stat_heavy.set_value(str(heavy), "worth reviewing" if heavy else "nothing heavy")
-        self.stat_services.set_value(str(len(services_rows)), "start automatically")
-        self.progress.stop("Startup scan complete")
-        self.status(f"{len(items)} startup entries, {enabled} enabled")
 
-    def _populate(self, items) -> None:
+        self.tree.setSortingEnabled(False)
         self.tree.clear()
         for item in items:
-            row = QTreeWidgetItem([item.name, item.type, item.display_location, item.impact, item.command])
-            row.setData(0, Qt.ItemDataRole.UserRole, item.name + "|" + item.type)
-            row.setToolTip(4, item.command)
-            row.setToolTip(2, item.display_location)
-            if not item.enabled:
-                for col in range(5):
-                    row.setForeground(col, QColor("#8b98a9"))
-                row.setText(3, "—")
-            else:
-                row.setForeground(3, QColor(_IMPACT_COLOR.get(item.impact, "#8b98a9")))
-            self.tree.addTopLevelItem(row)
-
-    def _populate_services(self, rows) -> None:
-        self.services_tree.clear()
-        for row in rows:
-            item = QTreeWidgetItem(
-                [row["name"], row["display"], row["state"].title(), row["start"], ""]
+            row = QTreeWidgetItem(
+                [
+                    item.name,
+                    "Enabled" if item.enabled else "Disabled",
+                    item.impact,
+                    item.type,
+                    item.display_location,
+                ]
             )
-            self.services_tree.addTopLevelItem(item)
-            combo = QComboBox()
-            combo.addItems(["(unchanged)", "Automatic", "Automatic (Delayed)", "Manual", "Disabled"])
-            combo.setFixedWidth(170)
-            combo.setProperty("service", row["name"])
-            combo.currentTextChanged.connect(lambda text, c=combo: self._change_service(c, text))
-            self.services_tree.setItemWidget(item, 4, combo)
+            row.setData(0, Qt.ItemDataRole.UserRole, item)
+            self.tree.addTopLevelItem(row)
+        self.tree.setSortingEnabled(True)
+        self.tree.resizeColumnToContents(0)
 
-    def _change_service(self, combo: QComboBox, text: str) -> None:
-        mapping = {
-            "Automatic": "auto",
-            "Automatic (Delayed)": "delayed-auto",
-            "Manual": "demand",
-            "Disabled": "disabled",
-        }
-        if text not in mapping:
-            return
-        name = combo.property("service")
-        answer = QMessageBox.question(
-            self,
-            "Change service",
-            f"Set “{name}” start type to “{text}”?\n\nThe previous setting is stored so you can change it back.",
+        self.services_tree.setSortingEnabled(False)
+        self.services_tree.clear()
+        for row in services_rows:
+            node = QTreeWidgetItem(
+                [row.get("name", ""), row.get("display", ""), row.get("start", ""), row.get("state", "")]
+            )
+            node.setData(0, Qt.ItemDataRole.UserRole, row.get("name", ""))
+            self.services_tree.addTopLevelItem(node)
+        self.services_tree.setSortingEnabled(True)
+        self.services_tree.resizeColumnToContents(0)
+
+        enabled = sum(1 for i in items if i.enabled)
+        self.summary.setText(
+            f"{enabled} of {len(items)} entries enabled · {len(services_rows)} services start automatically"
         )
-        if answer != QMessageBox.StandardButton.Yes:
-            combo.setCurrentIndex(0)
-            return
-        ok, err = startup.set_service_start(name, mapping[text])
-        if ok:
-            self.log(f"Service {name} → {text}", "ok")
-            self.status(f"{name} set to {text}")
-        else:
-            self.log(f"Service {name}: {err}", "error")
-            QMessageBox.warning(self, "Could not change service", err or "Unknown error")
-        combo.setCurrentIndex(0)
-        self.refresh()
+        self.progress.stop("")
+        self.status("Startup list updated")
+
+    def _on_failed(self, message: str) -> None:
+        self.btn_refresh.setEnabled(True)
+        self.progress.stop("Could not read startup entries")
+        self.on_error(message)
 
     # -- actions ---------------------------------------------------------
-    def _selected_items(self):
-        names = []
-        for row in self.tree.selectedItems():
-            key = row.data(0, Qt.ItemDataRole.UserRole)
-            if key:
-                names.append(key)
-        out = []
-        for item in self.items:
-            if (item.name + "|" + item.type) in names:
-                out.append(item)
-        return out
+    def _current(self) -> startup.StartupItem | None:
+        row = self.tree.currentItem()
+        return row.data(0, Qt.ItemDataRole.UserRole) if row else None
+
+    def _show_command(self, current, _previous) -> None:
+        item = current.data(0, Qt.ItemDataRole.UserRole) if current else None
+        self.command_label.setText(item.command if item else "")
 
     def _set_enabled(self, enabled: bool) -> None:
-        items = self._selected_items()
-        if not items:
+        item = self._current()
+        if item is None:
             return
-        verb = "Enable" if enabled else "Disable"
-        answer = QMessageBox.question(
-            self,
-            f"{verb} startup entries",
-            f"{verb} {len(items)} entr{'y' if len(items) == 1 else 'ies'}?\n\n"
-            + "\n".join(f" • {i.name}" for i in items[:10])
-            + ("\n …" if len(items) > 10 else "")
-            + ("\n\nDisabled entries are renamed, not deleted, so they can be restored." if not enabled else ""),
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        ok_count = 0
-        for item in items:
-            ok, err = startup.set_enabled(item, enabled)
-            if ok:
-                ok_count += 1
-                self.log(f"{verb}d: {item.name}", "ok")
-            else:
-                self.log(f"{verb} failed for {item.name}: {err}", "error")
-        self.status(f"{ok_count}/{len(items)} entries {verb.lower()}d")
-        self.refresh()
+        ok, error = startup.set_enabled(item, enabled)
+        verb = "enabled" if enabled else "disabled"
+        if ok:
+            self.log(f"{item.name} {verb}", "ok")
+            self.status(f"{item.name} {verb}")
+            self.refresh()
+        else:
+            QMessageBox.warning(self, "Could not change the entry", error or "Unknown error")
 
-    def _delete_selected(self) -> None:
-        items = self._selected_items()
-        if not items:
+    def _remove(self) -> None:
+        item = self._current()
+        if item is None:
             return
         answer = QMessageBox.question(
             self,
-            "Delete startup entries",
-            f"Permanently remove {len(items)} entr{'y' if len(items) == 1 else 'ies'}?\n\n"
-            + "\n".join(f" • {i.name}" for i in items[:10])
-            + "\n\nThis cannot be undone with WinX. Consider disabling instead.",
+            "Remove startup entry",
+            f"Permanently remove “{item.name}” from startup?\n\nThis does not uninstall the program.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        removed = 0
-        for item in items:
-            ok, err = startup.remove(item)
-            if ok:
-                removed += 1
-                self.log(f"Removed: {item.name}", "warn")
-            else:
-                self.log(f"Remove failed for {item.name}: {err}", "error")
-        self.status(f"Removed {removed} entries")
-        self.refresh()
+        ok, error = startup.remove(item)
+        if ok:
+            self.log(f"{item.name} removed from startup", "ok")
+            self.refresh()
+        else:
+            QMessageBox.warning(self, "Could not remove the entry", error or "Unknown error")
 
-    def _on_error(self, message: str) -> None:
-        self.progress.stop("failed")
-        self.log(message, "error")
+    def _change_start_type(self) -> None:
+        row = self.services_tree.currentItem()
+        if row is None:
+            return
+        name = row.data(0, Qt.ItemDataRole.UserRole)
+        current = row.text(2)
+        index = SERVICE_STARTS.index(current) if current in SERVICE_STARTS else 0
+        choice, ok = QInputDialog.getItem(
+            self, "Change start type", f"Start type for {name}:", SERVICE_STARTS, index, False
+        )
+        if not ok:
+            return
+        done, error = startup.set_service_start(name, choice)
+        if done:
+            self.log(f"{name} set to {choice}", "ok")
+            self.refresh()
+        else:
+            QMessageBox.warning(self, "Could not change the service", error or "Unknown error")

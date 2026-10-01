@@ -72,13 +72,72 @@ def main() -> int:
         QApplication.processEvents()
         record(f"open page: {key}", (time.perf_counter() - started) * 1000, PAGE_BUDGET_MS)
 
+    worker_errors = exercise_pages(window)
+
     if failures:
         print("\nUI thread blocked for too long:")
         for line in failures:
             print(f"  - {line}")
+    if worker_errors:
+        print("\nBackground work failed:")
+        for line in worker_errors:
+            print(f"  - {line}")
+    if failures or worker_errors:
         return 1
-    print("\nok    every UI-thread operation stayed within budget")
+    print("\nok    every UI-thread operation stayed within budget, and every page loaded")
     return 0
+
+
+def exercise_pages(window) -> list[str]:
+    """Actually load every page and report anything a worker raised.
+
+    The pages do their real work in background threads, so a broken call
+    signature there (for example handing a Qt signal to a module that expects
+    a callable) never shows up as an import or layout error — it only appears
+    as a traceback in the user's activity log. This drives each page the way a
+    user would and fails the build when a worker reports an error.
+    """
+    from PySide6.QtCore import QThreadPool
+    from PySide6.QtWidgets import QApplication
+
+    from winx.core.workers import Worker
+    from winx.ui.main_window import PAGE_FACTORIES
+    from winx.ui.pages.base import Page
+
+    errors: list[str] = []
+    original = Worker._safe_emit
+
+    def spy(self, signal, *args):
+        if signal is self.signals.error and args:
+            errors.append(str(args[0]).splitlines()[0])
+        return original(self, signal, *args)
+
+    Worker._safe_emit = spy
+    overall_deadline = time.perf_counter() + 240   # keep CI bounded
+    try:
+        print()
+        for key in PAGE_FACTORIES:
+            if time.perf_counter() > overall_deadline:
+                print(f"  skip  load page: {key:<38} (time budget reached)")
+                continue
+            before = len(errors)
+            page = window.page(key)
+            if isinstance(page, Page):
+                page.invalidate()
+                page.on_show()
+            started = time.perf_counter()
+            while time.perf_counter() - started < 30:
+                QApplication.processEvents()
+                if QThreadPool.globalInstance().activeThreadCount() == 0:
+                    break
+                time.sleep(0.02)
+            QApplication.processEvents()
+            new = errors[before:]
+            status = "ok  " if not new else "FAIL"
+            print(f"  {status}  load page: {key:<38} {'no errors' if not new else new[0][:60]}")
+    finally:
+        Worker._safe_emit = original
+    return errors
 
 
 if __name__ == "__main__":

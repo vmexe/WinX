@@ -1,4 +1,4 @@
-"""Application bootstrap: settings, theme, logging, single instance, main loop."""
+"""Application bootstrap: settings, logging, single instance, main loop."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ from .core.backup import BackupManager
 from .core.console import ensure_utf8_console
 from .core.engine import Engine
 from .ui.context import AppContext
-from .ui.theme import apply_theme
 
 
 def setup_logging() -> logging.Logger:
@@ -32,6 +31,12 @@ def setup_logging() -> logging.Logger:
 
 
 def build_application(argv: list[str]) -> QApplication:
+    """A plain QApplication.
+
+    No stylesheet, no palette override and no forced style: WinX uses whatever
+    the platform style is (Windows 11 / Vista style on Windows), so it matches
+    the rest of the system — including the user's light or dark mode setting.
+    """
     if hasattr(Qt, "AA_EnableHighDpiScaling"):
         QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     if hasattr(Qt, "AA_UseHighDpiPixmaps"):
@@ -42,7 +47,6 @@ def build_application(argv: list[str]) -> QApplication:
     app.setApplicationDisplayName(__app_name__)
     app.setOrganizationName("vmexe")
     app.setApplicationVersion(__version__)
-    app.setStyle("Fusion")
     return app
 
 
@@ -74,32 +78,17 @@ class WinX:
         self.settings = Settings()
         self.engine = Engine()
         self.backups = BackupManager()
-        self._apply_theme()
 
         self.window = None
         self.ctx = AppContext(
             engine=self.engine,
             settings=self.settings,
             backups=self.backups,
-            palette=self.palette,
             log=self._log,
             status=self._status,
             navigate=self._navigate,
             elevate=pf.relaunch_as_admin,
-            refresh_theme=self._apply_theme_refresh,
         )
-
-    # -- theme -----------------------------------------------------------
-    def _apply_theme(self) -> None:
-        theme = (self.settings.str("general/theme") or "dark").lower()
-        accent = self.settings.str("general/accent") or None
-        self.palette = apply_theme(self.app, theme, accent)
-
-    def _apply_theme_refresh(self) -> None:
-        self._apply_theme()
-        if self.window:
-            self.window.setStyleSheet("")
-            self.window.status(f"Theme: {self.palette.name}")
 
     # -- plumbing --------------------------------------------------------
     def _log(self, text: str, level: str = "info") -> None:
@@ -126,7 +115,6 @@ class WinX:
         from .ui.main_window import MainWindow
 
         self.window = MainWindow(self.ctx)
-        self.window.themeChanged.connect(lambda: None)
         last = self.settings.str("ui/last_page")
         if last and self.window.has_page(last):
             self.window._goto(last)

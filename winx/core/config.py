@@ -12,7 +12,7 @@ from . import platform as pf
 
 APP_NAME = "WinX"
 ORG_NAME = "vmexe"
-VERSION = "1.0.2"
+VERSION = "1.1.0"
 
 
 def _base_dir() -> Path:
@@ -58,8 +58,6 @@ def resource_path(*parts: str) -> Path:
 # settings
 # --------------------------------------------------------------------------
 DEFAULTS = {
-    "general/theme": "dark",               # dark | light | system
-    "general/accent": "#4cc2ff",
     "general/close_to_tray": False,
     "general/check_updates": True,
     "safety/backup_enabled": True,         # export changed keys before writing

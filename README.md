@@ -24,7 +24,8 @@ python main.py --version
 | **Trust** | Nothing runs before you see it. Every tweak has a *Preview* listing the exact registry values, service changes and commands. Repair tasks stream their real output into the activity log. |
 | **Reversibility** | Before a value is written, WinX records what was there — including *“nothing”*. Backups are listed in **Settings → History** and can be undone, individually or wholesale. Backups are **optional**; switch them off per run (the checkbox on the Apply bar) or globally. |
 | **Honesty about risk** | Each change is rated *Safe*, *Moderate* or *Advanced*, tagged *Admin* where elevation is required, and flagged when it needs a reboot or restarts Explorer. Advanced changes get their own confirmation. |
-| **Responsiveness** | Scans, repairs and enumerations run on a `QThreadPool`; the UI never blocks and long tasks can be cancelled. |
+| **Responsiveness** | Scans, repairs and enumerations run on a `QThreadPool`; the UI never blocks and long tasks can be cancelled. `tools/uicheck.py` measures UI-thread block time in CI. |
+| **Native look** | Standard Qt widgets only — no stylesheet, no custom palette, no bundled fonts and no hand-drawn icons. WinX uses the platform style, so it follows the system theme (including light/dark) and the user's font and scaling settings. |
 | **Testability** | The engine has no widget dependencies, so `python main.py --selftest` applies real changes, verifies them, undoes them and checks every module — on Windows *and* on Linux/macOS in simulation mode. |
 
 ---
@@ -136,15 +137,15 @@ winx/
     actions_data.py         the 59 one-shot tasks
     cleaner.py  startup.py  apps.py  disks.py  drivers.py  systeminfo.py
   ui/
-    main_window.py          nav rail, page stack, status bar, activity log
-    theme.py  icons.py      palettes/QSS and painter-drawn vector icons
-    widgets.py              switch, cards, badges, log console, progress rows
+    main_window.py          navigation list, page stack, menus, status bar, log dock
+    widgets.py              progress row + log console (plain Qt, no styling)
     pages/                  dashboard, cleaner, tweaks, repair, network, startup,
                             privacy, security, interface, gaming, apps, disks,
                             drivers, systeminfo, tools, settings
   selftest.py               headless end-to-end verification
 build/                      PyInstaller spec, version info, build.bat / build.ps1
-tools/                      make_icon.py (icon generator), screenshot.py (visual QA)
+tools/                      make_icon.py, screenshot.py (visual QA),
+                            check_imports.py, uicheck.py (UI responsiveness + load)
 .github/workflows/ci.yml    self-test on Windows + Linux, then build WinX.exe
 ```
 
