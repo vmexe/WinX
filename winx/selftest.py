@@ -310,14 +310,6 @@ def main() -> int:
     section("Updater")
     from .modules import updater as upd
 
-    sim_updates = upd.all_updates()
-    check("updater lists simulated updates", len(sim_updates) >= 5, f"{len(sim_updates)} rows")
-    check(
-        "updater separates Windows from programs",
-        any(u.source == "windows" for u in sim_updates)
-        and any(u.source == "winget" for u in sim_updates),
-    )
-    check("update version text reads as a change", "→" in sim_updates[-1].version_text or True)
     table = (
         "Name                 Id                     Version   Available Source\n"
         "----------------------------------------------------------------------\n"
@@ -333,9 +325,29 @@ def main() -> int:
         parsed[0].name,
     )
     check("winget ids captured", parsed[1].identifier == "7zip.7zip", parsed[1].identifier)
-    check("store scan is safe in simulation", upd.store_scan()[0] is True)
-    check("windows update install is safe in simulation", upd.install_windows_updates()[0] is True)
-    check("update history available", len(upd.windows_update_history()) >= 1)
+
+    # Anything that talks to Windows Update or the Store is only exercised in
+    # simulation: a self-test must never kick off a real update scan.
+    if pf.simulating():
+        sim_updates = upd.all_updates()
+        check(
+            "updater lists simulated updates",
+            len(sim_updates) >= 5,
+            f"{len(sim_updates)} rows",
+        )
+        check(
+            "updater separates Windows from programs",
+            any(u.source == "windows" for u in sim_updates)
+            and any(u.source == "winget" for u in sim_updates),
+        )
+        check("store scan is safe in simulation", upd.store_scan()[0] is True)
+        check(
+            "windows update install is safe in simulation",
+            upd.install_windows_updates()[0] is True,
+        )
+        check("update history available", len(upd.windows_update_history()) >= 1)
+    else:
+        check("update scans are skipped outside simulation", True, "nothing was run")
 
     section("Health score")
     score = systeminfo.health_score(
