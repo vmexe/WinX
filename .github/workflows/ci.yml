@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Publish the built WinX.exe as a GitHub release under this tag (e.g. v1.0.0). Leave empty to only build."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -64,6 +69,10 @@ jobs:
     name: Build WinX.exe
     needs: selftest
     runs-on: windows-latest
+    # The release step needs to be able to create tags/releases.
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -120,10 +129,15 @@ jobs:
             WinX-Windows-x64.zip
           if-no-files-found: error
 
+      # Publishes the executable to GitHub Releases, either from a pushed
+      # v* tag or from a manual run where a release tag was supplied.
       - name: Attach the build to the release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          name: WinX ${{ inputs.release_tag || github.ref_name }}
+          generate_release_notes: true
           files: |
             dist/WinX.exe
             WinX-Windows-x64.zip
