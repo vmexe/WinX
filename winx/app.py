@@ -13,6 +13,7 @@ from . import __app_name__, __version__
 from .config import Settings, log_file
 from .core import platform as pf
 from .core.backup import BackupManager
+from .core.console import ensure_utf8_console
 from .core.engine import Engine
 from .ui.context import AppContext
 from .ui.theme import apply_theme
@@ -137,6 +138,7 @@ class WinX:
 
 def run(argv: list[str] | None = None) -> int:
     """Entry point used by ``python -m winx`` and ``main.py``."""
+    ensure_utf8_console()
     argv = list(argv if argv is not None else sys.argv)
     if "--version" in argv:
         print(f"WinX {__version__}")

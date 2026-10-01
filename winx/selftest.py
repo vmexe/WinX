@@ -14,6 +14,7 @@ from PySide6.QtCore import QCoreApplication
 
 from .core import platform as pf
 from .core.backup import BackupManager
+from .core.console import ensure_utf8_console
 from .core.engine import Engine, ON, OFF
 from .core.format import human_size
 from .core.registry import seed_simulation
@@ -43,6 +44,7 @@ def section(title: str) -> None:
 
 def main() -> int:
     global APP
+    ensure_utf8_console()
     APP = QCoreApplication(sys.argv)
     seed_simulation(seeded_registry())
 

@@ -11,8 +11,13 @@ from __future__ import annotations
 
 import sys
 
+from winx.core.console import ensure_utf8_console
+
 
 def main() -> int:
+    # Windows consoles default to a legacy codepage; WinX prints → • ° “ ”.
+    ensure_utf8_console()
+
     if "--selftest" in sys.argv:
         from winx.selftest import main as selftest_main
 
