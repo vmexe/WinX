@@ -58,10 +58,10 @@ def main() -> int:
     pump(winx.app, 0.6)
 
     for key in PAGES:
-        if key not in window.pages:
+        if not window.has_page(key):
             print(f"skip {key}")
             continue
-        window._goto(key)
+        window._goto(key)          # builds the page on first visit
         pump(winx.app, 0.4)
         page = window.pages[key]
         if hasattr(page, "on_show"):

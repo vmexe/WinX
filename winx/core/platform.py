@@ -106,8 +106,14 @@ def is_windows_11() -> bool:
     return IS_WINDOWS and windows_version()[2] >= 22000
 
 
+@lru_cache(maxsize=1)
 def powershell_exe() -> str:
-    """Path to a usable PowerShell host."""
+    """Path to a usable PowerShell host.
+
+    Cached: probing spawns a real PowerShell process (~0.5s), and this is
+    called for *every* command we build. Without the cache a single
+    ``ps_json()`` costs two process launches instead of one.
+    """
     if not IS_WINDOWS:
         return "pwsh"
     for candidate in ("powershell", "pwsh"):

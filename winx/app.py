@@ -128,7 +128,7 @@ class WinX:
         self.window = MainWindow(self.ctx)
         self.window.themeChanged.connect(lambda: None)
         last = self.settings.str("ui/last_page")
-        if last in self.window.pages:
+        if last and self.window.has_page(last):
             self.window._goto(last)
         self.window.show()
 

@@ -189,12 +189,10 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # Pages are built on first visit. Constructing all fifteen up front
+        # (85 tweak rows, 59 action cards, …) cost seconds of frozen window
+        # before anything appeared.
         self.stack = QStackedWidget()
-        for key, factory in PAGE_FACTORIES.items():
-            page = factory(self.ctx)
-            page.setObjectName("page_" + key)
-            self.pages[key] = page
-            self.stack.addWidget(page)
         layout.addWidget(self.stack, 1)
 
         self.log_console = LogConsole(placeholder="WinX activity log — every command and result appears here.")
@@ -225,8 +223,26 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # navigation
     # ------------------------------------------------------------------
-    def _goto(self, key: str) -> None:
+    def has_page(self, key: str) -> bool:
+        """True for a known page, built or not."""
+        return key in PAGE_FACTORIES
+
+    def page(self, key: str) -> QWidget | None:
+        """The page for ``key``, constructing it on first use."""
         page = self.pages.get(key)
+        if page is not None:
+            return page
+        factory = PAGE_FACTORIES.get(key)
+        if factory is None:
+            return None
+        page = factory(self.ctx)
+        page.setObjectName("page_" + key)
+        self.pages[key] = page
+        self.stack.addWidget(page)
+        return page
+
+    def _goto(self, key: str) -> None:
+        page = self.page(key)
         if page is None:
             return
         self._current = key

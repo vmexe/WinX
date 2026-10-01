@@ -161,6 +161,9 @@ class DisksPage(Page):
         worker.signals.error.connect(self._on_error)
 
     def _load(self):
+        # An explicit visit to this page is the one place that wants live
+        # media/health data rather than the cached answer.
+        disks.invalidate_cache()
         return (disks.volumes(), disks.smart_report())
 
     def _on_loaded(self, payload) -> None:

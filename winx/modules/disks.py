@@ -50,8 +50,55 @@ class Volume:
         return human_size(self.total)
 
 
-def volumes() -> list[Volume]:
-    """List volumes with usage, media type and health where available."""
+# PowerShell storage queries cost seconds; the answers (which disk is an SSD,
+# what the controller reports as health) change essentially never while the app
+# is open, so they are cached. Usage figures always come fresh from psutil.
+_MEDIA_TTL = 300.0
+_media_cache: tuple[float, dict[str, str], dict[str, tuple[str, int | None]]] | None = None
+
+
+def _media_and_health() -> tuple[dict[str, str], dict[str, tuple[str, int | None]]]:
+    """Drive letter -> media type / health, cached for ``_MEDIA_TTL`` seconds."""
+    global _media_cache
+    now = time.monotonic()
+    if _media_cache and now - _media_cache[0] < _MEDIA_TTL:
+        return _media_cache[1], _media_cache[2]
+
+    media_by_drive: dict[str, str] = {}
+    smart_by_drive: dict[str, tuple[str, int | None]] = {}
+    for row in as_list(
+        ps_json(
+            "Get-PhysicalDisk | Select-Object FriendlyName, MediaType, HealthStatus | "
+            "ForEach-Object { $d = $_; $p = Get-Disk | Where-Object { $_.FriendlyName -eq $d.FriendlyName } | "
+            "Select-Object -First 1; "
+            "Get-Partition -DiskNumber $p.Number -ErrorAction SilentlyContinue | "
+            "Select-Object -ExpandProperty DriveLetter | ForEach-Object { "
+            "[PSCustomObject]@{ Drive=$_; Media=$d.MediaType; Health=$d.HealthStatus } } }",
+            timeout=240,
+        )
+    ):
+        drive = text(row.get("Drive")).strip()
+        if drive:
+            media_by_drive[drive] = text(row.get("Media"))
+            smart_by_drive[drive] = (text(row.get("Health")), None)
+
+    _media_cache = (now, media_by_drive, smart_by_drive)
+    return media_by_drive, smart_by_drive
+
+
+def invalidate_cache() -> None:
+    """Drop the cached media/health answers (used by the Disks page refresh)."""
+    global _media_cache
+    _media_cache = None
+
+
+def volumes(fast: bool = False) -> list[Volume]:
+    """List volumes with usage, media type and health where available.
+
+    ``fast=True`` returns usage only (psutil, microseconds, no subprocess) and
+    is what anything on the UI thread must use: the PowerShell storage cmdlets
+    take seconds on a cold cache and would freeze the window.
+    """
     if not pf.IS_WINDOWS or pf.simulating():
         from ..core.simdata import simulated_disks
 
@@ -89,23 +136,11 @@ def volumes() -> list[Volume]:
         ]
 
     out: list[Volume] = []
-    media_by_drive: dict[str, str] = {}
-    smart_by_drive: dict[str, tuple[str, int | None]] = {}
-    for row in as_list(
-        ps_json(
-            "Get-PhysicalDisk | Select-Object FriendlyName, MediaType, HealthStatus | "
-            "ForEach-Object { $d = $_; $p = Get-Disk | Where-Object { $_.FriendlyName -eq $d.FriendlyName } | "
-            "Select-Object -First 1; "
-            "Get-Partition -DiskNumber $p.Number -ErrorAction SilentlyContinue | "
-            "Select-Object -ExpandProperty DriveLetter | ForEach-Object { "
-            "[PSCustomObject]@{ Drive=$_; Media=$d.MediaType; Health=$d.HealthStatus } } }",
-            timeout=240,
-        )
-    ):
-        drive = text(row.get("Drive")).strip()
-        if drive:
-            media_by_drive[drive] = text(row.get("Media"))
-            smart_by_drive[drive] = (text(row.get("Health")), None)
+    if fast:
+        media_by_drive: dict[str, str] = {}
+        smart_by_drive: dict[str, tuple[str, int | None]] = {}
+    else:
+        media_by_drive, smart_by_drive = _media_and_health()
 
     if psutil is not None:
         for part in psutil.disk_partitions(all=False):
@@ -131,10 +166,29 @@ def volumes() -> list[Volume]:
 
 
 def _volume_label(drive: str) -> str:  # pragma: no cover - Windows only
-    data = ps_json(f"(Get-Volume -DriveLetter '{drive[0]}' -ErrorAction SilentlyContinue).FileSystemLabel", timeout=60)
-    if isinstance(data, str):
-        return data
-    return ""
+    """Volume label via the Win32 API.
+
+    This used to shell out to ``Get-Volume`` once per drive — about a second
+    each, on a code path the dashboard hit every two seconds. GetVolumeInfo is
+    a single syscall.
+    """
+    import ctypes
+
+    buf = ctypes.create_unicode_buffer(261)
+    try:
+        ok = ctypes.windll.kernel32.GetVolumeInformationW(
+            ctypes.c_wchar_p(f"{drive[0]}:\\"),
+            buf,
+            ctypes.sizeof(buf) // ctypes.sizeof(ctypes.c_wchar),
+            None,
+            None,
+            None,
+            None,
+            0,
+        )
+    except Exception:
+        return ""
+    return buf.value if ok else ""
 
 
 def smart_report() -> list[dict]:

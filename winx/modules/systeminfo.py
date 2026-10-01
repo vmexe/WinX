@@ -214,6 +214,27 @@ def _battery() -> dict:
     }
 
 
+def system_drive_usage() -> dict | None:
+    """Usage of the drive Windows is installed on — psutil only, no subprocess.
+
+    The dashboard polls this a few times a minute, so it must stay syscall
+    cheap: no PowerShell, no WMI.
+    """
+    if psutil is None:
+        return None
+    root = os.environ.get("SystemDrive", "C:") + "\\" if pf.IS_WINDOWS else "/"
+    try:
+        usage = psutil.disk_usage(root)
+    except Exception:
+        return None
+    return {
+        "drive": root.rstrip("\\/") or root,
+        "total": usage.total,
+        "free": usage.free,
+        "percent": int(round(usage.percent)),
+    }
+
+
 def live_stats() -> dict:
     """Cheap stats polled every second by the dashboard."""
     out = {"cpu": 0.0, "ram": 0.0, "disk_read": 0, "disk_write": 0, "net_sent": 0, "net_recv": 0, "procs": 0}

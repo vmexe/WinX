@@ -57,6 +57,14 @@ jobs:
           [importlib.import_module(m) for m in mods];
           print(f'imported {len(mods)} modules')"
 
+      # Measures how long the GUI thread is blocked by building the window,
+      # polling the dashboard meters and opening each page.
+      - name: Check UI responsiveness
+        if: runner.os == 'Windows'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python tools/uicheck.py
+
       - name: Run the self-test
         id: selftest
         shell: bash

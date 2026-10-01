@@ -239,6 +239,42 @@ def main() -> int:
         all(c["status"] in ("ok", "warn", "fail", "info") for c in checks),
     )
 
+    section("UI thread responsiveness")
+    # The dashboard polls these every two seconds on the GUI thread. If any of
+    # them launches a process (PowerShell took seconds per call) the window
+    # stops responding, which is exactly the bug this guards against.
+    import subprocess
+    import time as _time
+
+    spawned: list[str] = []
+    real_run, real_popen = subprocess.run, subprocess.Popen
+
+    def _trap_run(*a, **k):
+        spawned.append(str(a[0] if a else k.get("args")))
+        return real_run(*a, **k)
+
+    def _trap_popen(*a, **k):
+        spawned.append(str(a[0] if a else k.get("args")))
+        return real_popen(*a, **k)
+
+    subprocess.run, subprocess.Popen = _trap_run, _trap_popen
+    try:
+        started = _time.monotonic()
+        systeminfo.live_stats()
+        systeminfo.system_drive_usage()
+        disks.volumes(fast=True)
+        elapsed = _time.monotonic() - started
+    finally:
+        subprocess.run, subprocess.Popen = real_run, real_popen
+
+    check("live polling spawns no processes", not spawned, ", ".join(spawned[:3]))
+    check(f"live polling is fast ({elapsed * 1000:.0f}ms)", elapsed < 1.0)
+    check("system drive usage available", systeminfo.system_drive_usage() is not None)
+    check(
+        "PowerShell host lookup is cached",
+        hasattr(pf.powershell_exe, "cache_info"),
+    )
+
     section("Simulation safety")
     check("simulation is active off-Windows", pf.simulating() or pf.IS_WINDOWS)
     if not pf.IS_WINDOWS:

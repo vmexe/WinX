@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -16,7 +18,7 @@ from PySide6.QtWidgets import (
 from ...core import platform as pf
 from ...core.format import human_duration, human_size
 from ...core.workers import submit
-from ...modules import cleaner, disks, startup, systeminfo
+from ...modules import cleaner, startup, systeminfo
 from ..context import AppContext
 from ..icons import icon
 from ..widgets import Badge, ProgressRow, StatCard
@@ -51,7 +53,7 @@ class DashboardPage(Page):
         self._timer = QTimer(self)
         self._timer.setInterval(2000)
         self._timer.timeout.connect(self._tick)
-        self._timer.start()
+        # started by showEvent
 
     # -- ui --------------------------------------------------------------
     def _build(self) -> None:
@@ -168,16 +170,24 @@ class DashboardPage(Page):
         worker.signals.result.connect(self._on_loaded)
         worker.signals.error.connect(self._on_error)
 
+    #: the dashboard only needs an estimate, and a full walk of every browser
+    #: cache and Windows.old can take minutes of disk I/O
+    JUNK_SCAN_BUDGET = 20.0
+
     def _load(self, progress=None, emit=None):
         emit = emit or (lambda _m: None)
         junk = 0
         try:
             if progress:
                 progress(1, 4, "measuring junk files")
+            deadline = time.monotonic() + self.JUNK_SCAN_BUDGET
             results = cleaner.scan(
                 progress=lambda d, t, m: progress(1, 4, f"junk: {m}") if progress else None,
+                is_cancelled=lambda: time.monotonic() > deadline,
             )
             junk = sum(r.size for r in results if not r.unmeasured)
+            if time.monotonic() > deadline:
+                emit("junk estimate stopped at 20s — open the Cleaner for an exact figure")
         except Exception as exc:
             emit(f"junk scan skipped: {exc}")
 
@@ -204,7 +214,7 @@ class DashboardPage(Page):
         self.progress.stop(f"{len(self.checks)} checks complete")
 
         boot = info.get("boot_time") or 0
-        uptime = human_duration((info.get("boot_time") and (__import__("time").time() - boot)) or 0)
+        uptime = human_duration((info.get("boot_time") and (time.time() - boot)) or 0)
         self.hero_sub.setText(info.get("os", ""))
         state = f"{info.get('computer','')} · {info.get('user','')} · up {uptime}"
         if pf.simulating():
@@ -281,16 +291,36 @@ class DashboardPage(Page):
 
     # -- live ------------------------------------------------------------
     def _tick(self) -> None:
+        """Live meters.
+
+        Everything here runs on the UI thread, so it must stay syscall cheap.
+        This used to call ``disks.volumes()``, which shells out to PowerShell
+        (``Get-PhysicalDisk``, then ``Get-Volume`` per drive) — seconds of
+        blocking, every two seconds, which is what made the window stop
+        responding. Media type and health are not live data; they are loaded
+        once by the background refresh instead.
+        """
         stats = systeminfo.live_stats()
         self.stat_cpu.set_value(f"{stats['cpu']:.0f}%", f"{stats['procs']} processes", percent=int(stats["cpu"]))
         self.stat_ram.set_value(f"{stats['ram']:.0f}%", "in use", percent=int(stats["ram"]))
-        try:
-            volumes = disks.volumes()
-            if volumes:
-                vol = volumes[0]
-                self.stat_disk.set_value(vol.free_text, f"{vol.drive} {vol.used_pct}% used", percent=vol.used_pct)
-        except Exception:
-            pass
+        usage = systeminfo.system_drive_usage()
+        if usage:
+            self.stat_disk.set_value(
+                human_size(usage["free"]),
+                f"{usage['drive']} {usage['percent']}% used",
+                percent=usage["percent"],
+            )
+
+    # The meters only matter while the page is on screen; polling psutil (and
+    # repainting) behind a hidden page is pure overhead.
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().showEvent(event)
+        self._tick()
+        self._timer.start()
+
+    def hideEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().hideEvent(event)
+        self._timer.stop()
 
     def _elevate(self) -> None:
         if self.ctx.elevate():
